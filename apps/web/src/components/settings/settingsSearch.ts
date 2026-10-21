@@ -482,6 +482,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("usage quota rate limit reset recover continue")],
   },
   {
+    id: "compact-sidebar-cards",
+    title: "Compact sidebar items",
+    to: "/settings/general",
+    searchTerms: ["sidebar thread rows metadata provider icons compact expanded"],
+  },
+  {
     id: "working-shelf",
     title: msg("Working section"),
     to: "/settings/general",

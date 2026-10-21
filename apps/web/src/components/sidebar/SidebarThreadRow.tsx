@@ -1,5 +1,6 @@
 import { useAtomMount } from "@effect/atom-react";
 import { asLaunchingThread } from "@t3tools/client-runtime/state/thread-inbox";
+import { SidebarThreadCardLayout } from "./SidebarThreadCardLayout";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
@@ -701,6 +702,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     variant,
     variantAction,
   } = props;
+  const compactCards = useClientSettings((settings) => settings.sidebarCompactCards);
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
   const canOperateThread = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
@@ -1538,8 +1540,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       // The hints are the rendered heights inside py-0.5. Revealing the open thread measures rows
       // that have not rendered yet, so a hint off by a pixel lands it a pixel short per row above.
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
-        metaLineEmpty && "[contain-intrinsic-size:auto_60px]",
+        "list-none py-0.5 [content-visibility:auto]",
+        compactCards ? "[contain-intrinsic-size:auto_60px]" : "[contain-intrinsic-size:auto_78px]",
+        !compactCards && metaLineEmpty && "[contain-intrinsic-size:auto_60px]",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -1564,11 +1567,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             />
           }
         >
-          <div
-            className={cn(
-              "relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)",
-              metaLineEmpty && "h-auto",
-            )}
+          <SidebarThreadCardLayout
+            compact={compactCards}
+            metadataEmpty={metaLineEmpty}
+            metadata={metaLine}
           >
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {draftIndicator}
@@ -1580,13 +1582,31 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {pinIndicator}
               {props.projectDisplayName ? (
                 <span
-                  className={cn("min-w-0 flex-1 truncate font-normal text-secondary-label text-xs")}
+                  className={cn(
+                    "min-w-0 truncate font-normal text-secondary-label text-xs",
+                    !compactCards && "flex-1",
+                  )}
                 >
                   {props.projectDisplayName}
                 </span>
               ) : (
                 <span className="flex-1" />
               )}
+              {compactCards ? (
+                <>
+                  <span
+                    aria-hidden
+                    className="pointer-events-none inline-flex shrink-0 items-center"
+                  >
+                    <SidebarProviderStack
+                      thread={thread}
+                      providerEntryByInstanceId={props.providerEntryByInstanceId}
+                    />
+                  </span>
+                  {terminalStatusIcon}
+                  {prBadge}
+                </>
+              ) : null}
               {sortable?.isDragging ? (
                 dragDestination
               ) : (
@@ -1734,10 +1754,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   <T>Regenerating title</T>
                 </span>
               ) : null}
-              {titleLineIcons}
+              {compactCards ? null : titleLineIcons}
             </div>
-            {metaLine}
-          </div>
+          </SidebarThreadCardLayout>
         </TooltipTrigger>
         {detailsTooltip}
       </Tooltip>
