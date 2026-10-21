@@ -1408,3 +1408,133 @@ it.effect("dispatch records the command outcome and its duration", () =>
     assert.strictEqual((yield* durations).count - durationsBefore, 1);
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect("keeps ordinary pins through turns and restores pinned snoozed work", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make("thread:pinned-work");
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-pinned-work"),
+      threadId,
+      projectId: ProjectId.make("project:pinned-work"),
+      title: "Pinned work",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.pin",
+      commandId: CommandId.make("pin-work"),
+      threadId,
+      orderKey: "a0",
+    });
+    const pinnedAt = (yield* projections.getThreadShell(threadId))?.pinnedAt;
+    assert.ok(pinnedAt);
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("dispatch-pinned-work"),
+      threadId,
+      messageId: MessageId.make("pinned-work-message"),
+      text: "Continue this work",
+      attachments: [],
+      dispatchMode: { type: "defer_start" },
+      createdBy: "user",
+      creationSource: "mobile",
+    });
+    assert.deepEqual((yield* projections.getThreadShell(threadId))?.pinnedAt, pinnedAt);
+    yield* orchestrator.dispatch({
+      type: "run.interrupt",
+      commandId: CommandId.make("stop-pinned-work"),
+      threadId,
+      runId: (yield* projections.getThreadRecords(threadId, ["runs"])).runs[0]!.id,
+    });
+    const pin = { pinnedAt, pinOrderKey: "a0" };
+    assert.deepInclude(yield* projections.getThreadShell(threadId), pin);
+    assert.deepInclude((yield* projections.getThreadProjection(threadId)).thread, pin);
+    yield* orchestrator.dispatch({
+      type: "thread.snooze",
+      commandId: CommandId.make("snooze-pinned-work"),
+      threadId,
+      snoozedUntil: DateTime.formatIso(DateTime.add(yield* DateTime.now, { hours: 1 })),
+    });
+    assert.deepInclude(yield* projections.getThreadShell(threadId), pin);
+    yield* orchestrator.dispatch({
+      type: "thread.unsnooze",
+      commandId: CommandId.make("wake-pinned-work"),
+      threadId,
+      reason: "user",
+    });
+    assert.deepInclude(yield* projections.getThreadShell(threadId), {
+      ...pin,
+      snoozedUntil: null,
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.settle",
+      commandId: CommandId.make("settle-pinned-work"),
+      threadId,
+    });
+    assert.deepInclude(yield* projections.getThreadShell(threadId), {
+      pinnedAt: null,
+      pinOrderKey: null,
+      settledOverride: "settled",
+    });
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("rejects automatic settlement of pins even with a current snapshot", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make("thread:pin-settlement-race");
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-pin-settlement-race"),
+      threadId,
+      projectId: ProjectId.make("project:pin-settlement-race"),
+      title: "Protected work",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "mobile",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.pin",
+      commandId: CommandId.make("pin-settlement-race"),
+      threadId,
+    });
+    const pinned = yield* projections.getThread(threadId);
+    const outcome = yield* orchestrator
+      .dispatch({
+        type: "thread.auto-settle",
+        commandId: CommandId.make("auto-settle-pinned-work"),
+        threadId,
+        snapshotAt: pinned.updatedAt,
+      })
+      .pipe(Effect.result);
+    assert.ok(Result.isFailure(outcome));
+    assert.equal(outcome.failure._tag, "OrchestratorDispatchError");
+    assert.deepEqual(yield* projections.getThread(threadId), pinned);
+    yield* orchestrator.dispatch({
+      type: "thread.unpin",
+      commandId: CommandId.make("unpin-protected-work"),
+      threadId,
+    });
+    assert.isNull((yield* projections.getThreadShell(threadId))?.pinnedAt);
+    yield* orchestrator.dispatch({
+      type: "thread.auto-settle",
+      commandId: CommandId.make("auto-settle-unpinned-work"),
+      threadId,
+      snapshotAt: (yield* projections.getThread(threadId)).updatedAt,
+    });
+    assert.equal((yield* projections.getThreadShell(threadId))?.settledOverride, "settled");
+  }).pipe(Effect.provide(layerTest)),
+);
