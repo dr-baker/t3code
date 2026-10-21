@@ -370,3 +370,17 @@ describe("server model preferences", () => {
     expect(decodeServerSettingsPatch(input)).toEqual(input);
   });
 });
+
+describe("ClientSettings personal sidebar", () => {
+  it("defaults personal compact cards on and persists either layout", () => {
+    expect(decodeClientSettings({}).sidebarCompactCards).toBe(true);
+    for (const sidebarCompactCards of [false, true]) {
+      const patch = decodeClientSettingsPatch({ sidebarCompactCards });
+      expect(decodeClientSettings(JSON.parse(JSON.stringify(patch))).sidebarCompactCards).toBe(
+        sidebarCompactCards,
+      );
+    }
+    expect(() => decodeClientSettingsPatch({ sidebarCompactCards: "yes" })).toThrow();
+  });
+
+});
