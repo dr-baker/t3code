@@ -436,6 +436,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarProjectSortOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder
       ? ["Project order"]
       : []),
+    ...(settings.sidebarCompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarCompactCards
+      ? ["Compact sidebar items"]
+      : []),
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? ["Working section"]
       : []),
@@ -606,6 +609,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
+      sidebarCompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarCompactCards,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
@@ -848,6 +852,32 @@ export function GeneralSettingsPanel() {
             </Select>
           }
         />
+        <SettingsRow
+          {...searchableSetting("compact-sidebar-cards")}
+          description="Show provider logos beside the project and hide the metadata row. Turn off to restore expanded items."
+          resetAction={
+            settings.sidebarCompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarCompactCards ? (
+              <SettingResetButton
+                label="compact sidebar items"
+                onClick={() =>
+                  updateSettings({
+                    sidebarCompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarCompactCards,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarCompactCards}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarCompactCards: Boolean(checked) })
+              }
+              aria-label="Compact sidebar items"
+            />
+          }
+        />
+
         <SettingsRow
           {...searchableSetting("working-shelf")}
           description="Fold working and monitoring threads into a Working section. They return to the top of the inbox when they need you."

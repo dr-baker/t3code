@@ -1,3 +1,4 @@
+import { SidebarThreadCardLayout } from "./SidebarThreadCardLayout";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
@@ -628,6 +629,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     variant,
     variantAction,
   } = props;
+  const compactCards = useClientSettings((settings) => settings.sidebarCompactCards);
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
   const canOperateThread = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
@@ -1268,8 +1270,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       {...sortableRootProps}
       {...(fileDropHandlers ?? {})}
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
-        metaLineEmpty && "redesign:[contain-intrinsic-size:auto_58px]",
+        "list-none py-0.5 [content-visibility:auto]",
+        compactCards ? "[contain-intrinsic-size:auto_60px]" : "[contain-intrinsic-size:auto_78px]",
+        !compactCards && metaLineEmpty && "redesign:[contain-intrinsic-size:auto_58px]",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -1293,12 +1296,66 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           }
         >
           {accessibleTitle}
-          <div
-            className={cn(
-              "relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)",
-              metaLineEmpty && "redesign:h-auto",
-            )}
-          >
+          <SidebarThreadCardLayout compact={compactCards} metadataEmpty={metaLineEmpty} metadata={
+            <div
+              className={cn(
+                "mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs",
+                metaLineEmpty && "redesign:hidden",
+              )}
+            >
+              {thread.branch ? (
+                <>
+                  <ThreadWorktreeIndicator thread={thread} />
+                  <span className="flex min-w-0 flex-1 text-muted-foreground/40 redesign:text-inherit">
+                    <MiddleTruncate value={thread.branch} showTitle={false} />
+                  </span>
+                </>
+              ) : showsScratchMachine ? (
+                <>
+                  <EnvironmentMachineIcon
+                    aria-hidden
+                    kind={props.environmentMachine}
+                    className="size-3 shrink-0 text-muted-foreground/40 redesign:text-inherit"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground/40 redesign:text-inherit">
+                    {props.scratchMachineLabel}
+                  </span>
+                </>
+              ) : (
+                <span className="flex-1" />
+              )}
+              {terminalStatusIcon}
+              {prBadge}
+              {diff ? (
+                <span className="shrink-0 font-mono">
+                  <span className="text-diff-addition-foreground">
+                    +{formatDiffCount(diff.insertions)}
+                  </span>{" "}
+                  <span className="text-diff-deletion-foreground">
+                    −{formatDiffCount(diff.deletions)}
+                  </span>
+                </span>
+              ) : null}
+              <span
+                aria-hidden
+                className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
+              >
+                {isRemote && !showsScratchMachine ? (
+                  <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
+                    <EnvironmentMachineIcon
+                      aria-hidden
+                      kind={props.environmentMachine}
+                      className="size-3.5"
+                    />
+                  </span>
+                ) : null}
+                <SidebarProviderStack
+                  thread={thread}
+                  providerEntryByInstanceId={props.providerEntryByInstanceId}
+                />
+              </span>
+            </div>
+          }>
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {draftIndicator}
               {props.project ? (
@@ -1310,7 +1367,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {props.projectDisplayName ? (
                 <span
                   className={cn(
-                    "min-w-0 flex-1 truncate text-secondary-label text-xs",
+                    "min-w-0 truncate text-secondary-label text-xs",
+                    !compactCards && "flex-1",
                     shouldRecede ? "font-normal" : "font-medium redesign:font-normal",
                   )}
                 >
@@ -1319,6 +1377,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               ) : (
                 <span className="flex-1" />
               )}
+              {compactCards ? (
+                <>
+                  <span
+                    aria-hidden
+                    className="pointer-events-none inline-flex shrink-0 items-center"
+                  >
+                    <SidebarProviderStack
+                      thread={thread}
+                      providerEntryByInstanceId={props.providerEntryByInstanceId}
+                    />
+                  </span>
+                  {terminalStatusIcon}
+                  {prBadge}
+                </>
+              ) : null}
               {sortable?.isDragging ? (
                 dragDestination
               ) : (
@@ -1465,7 +1538,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   Regenerating title
                 </span>
               ) : null}
-              {metaLineEmpty ? (
+              {!compactCards && metaLineEmpty ? (
                 <span aria-hidden className="hidden shrink-0 redesign:inline-flex">
                   <SidebarProviderStack
                     thread={thread}
@@ -1474,65 +1547,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 </span>
               ) : null}
             </div>
-            <div
-              className={cn(
-                "mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs",
-                metaLineEmpty && "redesign:hidden",
-              )}
-            >
-              {thread.branch ? (
-                <>
-                  <ThreadWorktreeIndicator thread={thread} />
-                  <span className="flex min-w-0 flex-1 text-muted-foreground/40 redesign:text-inherit">
-                    <MiddleTruncate value={thread.branch} showTitle={false} />
-                  </span>
-                </>
-              ) : showsScratchMachine ? (
-                <>
-                  <EnvironmentMachineIcon
-                    aria-hidden
-                    kind={props.environmentMachine}
-                    className="size-3 shrink-0 text-muted-foreground/40 redesign:text-inherit"
-                  />
-                  <span className="min-w-0 flex-1 truncate text-muted-foreground/40 redesign:text-inherit">
-                    {props.scratchMachineLabel}
-                  </span>
-                </>
-              ) : (
-                <span className="flex-1" />
-              )}
-              {terminalStatusIcon}
-              {prBadge}
-              {diff ? (
-                <span className="shrink-0 font-mono">
-                  <span className="text-diff-addition-foreground">
-                    +{formatDiffCount(diff.insertions)}
-                  </span>{" "}
-                  <span className="text-diff-deletion-foreground">
-                    −{formatDiffCount(diff.deletions)}
-                  </span>
-                </span>
-              ) : null}
-              <span
-                aria-hidden
-                className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
-              >
-                {isRemote && !showsScratchMachine ? (
-                  <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
-                    <EnvironmentMachineIcon
-                      aria-hidden
-                      kind={props.environmentMachine}
-                      className="size-3.5"
-                    />
-                  </span>
-                ) : null}
-                <SidebarProviderStack
-                  thread={thread}
-                  providerEntryByInstanceId={props.providerEntryByInstanceId}
-                />
-              </span>
-            </div>
-          </div>
+
+          </SidebarThreadCardLayout>
           {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
         </TooltipTrigger>
         {detailsTooltip}

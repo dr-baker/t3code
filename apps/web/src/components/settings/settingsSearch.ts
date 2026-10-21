@@ -410,6 +410,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["redesign look style sidebar composer black quieter classic"],
   },
   {
+    id: "compact-sidebar-cards",
+    title: "Compact sidebar items",
+    to: "/settings/general",
+    searchTerms: ["sidebar thread rows metadata provider icons compact expanded"],
+  },
+  {
     id: "working-shelf",
     title: "Working section",
     to: "/settings/general",
