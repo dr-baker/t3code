@@ -41,8 +41,9 @@ const DesktopSettingsPatch = Schema.Struct({
 const decodeDesktopSettingsPatch = Schema.decodeEffect(Schema.fromJsonString(DesktopSettingsPatch));
 const encodeDesktopSettingsPatch = Schema.encodeEffect(Schema.fromJsonString(DesktopSettingsPatch));
 
-function layerEnvironment(baseDir: string, appVersion = "0.0.17") {
+function layerEnvironment(baseDir: string, appVersion = "0.0.17", personalBuild = false) {
   return DesktopEnvironment.layer({
+    personalBuild,
     dirname: "/repo/apps/desktop/src",
     homeDirectory: baseDir,
     platform: "darwin",
@@ -69,7 +70,7 @@ const withSettings = <A, E, R>(
     E,
     R | DesktopAppSettings.DesktopAppSettings | DesktopEnvironment.DesktopEnvironment
   >,
-  options?: { readonly appVersion?: string },
+  options?: { readonly appVersion?: string; readonly personalBuild?: boolean },
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -79,7 +80,9 @@ const withSettings = <A, E, R>(
     return yield* effect.pipe(
       Effect.provide(
         DesktopAppSettings.layer.pipe(
-          Layer.provideMerge(layerEnvironment(baseDir, options?.appVersion)),
+          Layer.provideMerge(
+            layerEnvironment(baseDir, options?.appVersion, options?.personalBuild),
+          ),
           Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
@@ -126,6 +129,22 @@ describe("DesktopSettings", () => {
       });
       assert.equal(operationSpans[0]!.status._tag, "Ended");
     }),
+  );
+
+  it.effect("keeps personal local execution off through partial settings and reloads", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        assert.equal((yield* settings.load).localEnvironmentEnabled, false);
+        yield* writeSettingsPatch({ mainWindowMaximized: false });
+        assert.equal((yield* settings.load).localEnvironmentEnabled, false);
+        yield* settings.setLocalEnvironmentEnabled(true);
+        assert.equal((yield* settings.load).localEnvironmentEnabled, true);
+        yield* settings.setLocalEnvironmentEnabled(false);
+        assert.equal((yield* settings.load).localEnvironmentEnabled, false);
+      }),
+      { personalBuild: true },
+    ),
   );
 
   it.effect(

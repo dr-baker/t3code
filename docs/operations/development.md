@@ -320,6 +320,18 @@ Missing or rejected entries compile from the shipped JavaScript. Prepared backen
 explicit startup flush; Node can persist missing entries on normal exit. The writable fallback
 keeps the explicit flush needed when Windows force-kills the backend.
 
+### Personal Mac app
+
+Build with `vp run dist:desktop:dmg --personal --build-version <nightly-version>` to package
+**T3 Code Personal** alongside the official app. Personal artifacts have their own bundle ID,
+Electron profile (`t3code-personal` under Application Support), and local app state
+(`~/.t3-personal`). They do not configure an automatic update feed.
+
+Local execution defaults off. Use **Settings → Connections → Add environment** to pair with
+the server used by the official app. Both clients then share that server's conversations,
+projects, pins, and server settings. Appearance, shortcuts, and sidebar preferences remain
+local to each app. Keep one server responsible for the shared database.
+
 ### Linux AppImage prerequisites
 
 Build on Linux because the browser-secret helper links against the host's libsecret. Install

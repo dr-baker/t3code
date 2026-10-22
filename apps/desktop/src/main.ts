@@ -18,6 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 
 import * as Electron from "electron";
+import { PERSONAL_APP_NAME } from "./app/personalBuild.ts";
 
 import * as NetService from "@t3tools/shared/Net";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -99,6 +100,7 @@ const layerDesktopEnvironment = Layer.unwrap(
     const platform = yield* HostProcess.Platform;
     const processArch = yield* HostProcess.Architecture;
     return DesktopEnvironment.layer({
+      personalBuild: Electron.app.getName() === PERSONAL_APP_NAME,
       dirname: __dirname,
       homeDirectory: NodeOS.homedir(),
       platform,
