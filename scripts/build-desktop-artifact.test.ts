@@ -523,6 +523,35 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect("isolates personal Mac packaging and excludes upstream update feeds", () =>
+    Effect.gen(function* () {
+      const personal = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.1.1-nightly.20261020.3438",
+        false,
+        false,
+        undefined,
+        undefined,
+        false,
+        "arm64",
+        true,
+      );
+      assert.equal(personal.appId, "com.drbaker.t3code.personal");
+      assert.equal(personal.productName, "T3 Code Personal");
+      assert.equal(personal.artifactName, "T3-Code-Personal-${version}-${arch}.${ext}");
+      assert.isNull(personal.publish);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { GITHUB_REPOSITORY: "pingdotgg/t3code" },
+          }),
+        ),
+      ),
+    ),
+  );
+
   // pnpm writes "set this to true or false" placeholders into allowBuilds when a
   // tarball changes. pnpm ignores them, but the release build decode rejects them.
   it.effect("decodes the repo allowBuilds and every file: tarball it names exists", () =>
