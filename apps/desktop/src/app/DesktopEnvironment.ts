@@ -11,7 +11,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import type * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import { resolveDefaultDesktopSettings } from "../settings/DesktopSettingsDefaults.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
 import { resolveLinuxDesktopEntryName } from "./DesktopEarlyElectronStartup.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
@@ -251,7 +252,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     desktopLauncherPath: config.desktopLauncherPath,
     appImagePath: config.appImagePath,
     defaultDesktopSettings: {
-      ...DesktopAppSettings.resolveDefaultDesktopSettings(input.appVersion),
+      ...resolveDefaultDesktopSettings(input.appVersion),
       ...(personalBuild ? { localEnvironmentEnabled: false } : {}),
     },
     runtimeInfo: resolveDesktopRuntimeInfo({
