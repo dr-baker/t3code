@@ -18,11 +18,17 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import {
-  DEFAULT_LINUX_PASSWORD_STORE,
   normalizeLinuxPasswordStorePreference,
   type LinuxPasswordStorePreference,
 } from "../linuxSecretStorage.ts";
-import { resolveDefaultDesktopUpdateChannel } from "../updates/updateChannels.ts";
+import {
+  DEFAULT_DESKTOP_SETTINGS,
+  DEFAULT_TAILSCALE_SERVE_PORT,
+} from "./DesktopSettingsDefaults.ts";
+export {
+  DEFAULT_DESKTOP_SETTINGS,
+  resolveDefaultDesktopSettings,
+} from "./DesktopSettingsDefaults.ts";
 import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 
 export interface DesktopSettings {
@@ -46,7 +52,6 @@ export interface DesktopSettingsChange {
   readonly changed: boolean;
 }
 
-const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const MIN_MAIN_WINDOW_SIZE = {
   width: 840,
   height: 620,
@@ -62,21 +67,6 @@ export const DEFAULT_MAIN_WINDOW_SIZE = {
   width: 1100,
   height: 780,
 } as const;
-
-export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
-  localEnvironmentEnabled: true,
-  linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
-  mainWindowBounds: null,
-  mainWindowMaximized: false,
-  serverExposureMode: "local-only",
-  tailscaleServeEnabled: false,
-  tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
-  updateChannel: "latest",
-  updateChannelConfiguredByUser: false,
-  wslBackendEnabled: false,
-  wslDistro: null,
-  wslOnly: false,
-};
 
 const DesktopWindowBoundsDocument = Schema.Struct({
   x: Schema.Number,
@@ -176,13 +166,6 @@ export class DesktopAppSettings extends Context.Service<
     readonly applyWslWindowsFallbackInMemory: Effect.Effect<DesktopSettingsChange>;
   }
 >()("@t3tools/desktop/settings/DesktopAppSettings") {}
-
-export function resolveDefaultDesktopSettings(appVersion: string): DesktopSettings {
-  return {
-    ...DEFAULT_DESKTOP_SETTINGS,
-    updateChannel: resolveDefaultDesktopUpdateChannel(appVersion),
-  };
-}
 
 function normalizeTailscaleServePort(value: unknown): number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65_535
