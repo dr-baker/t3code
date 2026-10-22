@@ -41,5 +41,9 @@
     "tailwindcss": "^4.0.0",
     "vite-plus": "catalog:"
   },
-  "productName": "T3 Code (Beta)"
+  "productName": "T3 Code (Beta)",
+  "t3codePersonal": {
+    "name": "T3 Code Personal",
+    "appId": "com.drbaker.t3code.personal"
+  }
 }
