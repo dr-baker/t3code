@@ -38,6 +38,20 @@ const makeEnvironment = (
 ) => DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(layerEnvironment(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  it.effect("isolates personal app state and defaults to the shared-server client role", () =>
+    Effect.gen(function* () {
+      const personal = yield* makeEnvironment({ personalBuild: true, isPackaged: true });
+      const official = yield* makeEnvironment({ isPackaged: true });
+      assert.equal(personal.branding.baseName, "T3 Code Personal");
+      assert.equal(personal.appUserModelId, "com.drbaker.t3code.personal");
+      assert.equal(personal.baseDir, "/Users/alice/.t3-personal");
+      assert.equal(personal.stateDir, "/Users/alice/.t3-personal/userdata");
+      assert.equal(personal.defaultDesktopSettings.localEnvironmentEnabled, false);
+      assert.equal(official.baseDir, "/Users/alice/.t3");
+      assert.equal(official.defaultDesktopSettings.localEnvironmentEnabled, true);
+    }),
+  );
+
   it.effect("uses the packaged Windows server sidecar as the backend root", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment({
