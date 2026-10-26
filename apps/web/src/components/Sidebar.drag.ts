@@ -15,7 +15,8 @@ type ThreadItem = Extract<SidebarListItem, { kind: "thread" }>;
 type Layout = Parameters<SortingStrategy>[0];
 const isShelfHeader = (item: SidebarListItem | undefined) =>
   item?.kind === "marker" &&
-  (item.marker === "working-header" ||
+  (item.marker === "pinned-header" ||
+    item.marker === "working-header" ||
     item.marker === "snoozed-header" ||
     item.marker === "settled-header");
 
@@ -39,30 +40,53 @@ export function createSidebarCollisionDetection(
   const sections = new Map<string, SidebarSection | null>();
   let previousPointerY = options.activationY;
   let boundarySection: "pinned" | "active" | undefined;
+  const pinsBelowActive =
+    (options.items?.findIndex(
+      (item) => item.kind === "marker" && item.marker === "pinned-header",
+    ) ?? -1) >
+    (options.items?.findIndex(
+      (item) => item.kind === "marker" && item.marker === "pinned-divider",
+    ) ?? -1);
   return (args) => {
     let collisions = closestCenter(args);
     const pointer = args.pointerCoordinates;
     const items = options.items;
     const source = items?.find((item) => item.kind === "thread" && item.key === args.active.id);
     const boundary = args.droppableContainers
-      .find((container) => container.id === sidebarMarkerId("pinned-divider"))
-      ?.node.current?.querySelector(".sidebar-drag-boundary-label")
+      .find(
+        (container) =>
+          container.id === sidebarMarkerId(pinsBelowActive ? "pinned-header" : "pinned-divider"),
+      )
+      ?.node.current?.querySelector(pinsBelowActive ? "button" : ".sidebar-drag-boundary-label")
       ?.getBoundingClientRect();
     if (items && boundary && source?.kind === "thread" && pointer) {
-      boundarySection ??= source.section === "pinned" ? "pinned" : "active";
+      boundarySection ??= pinsBelowActive
+        ? (options.activationY ?? args.active.rect.current.initial?.top ?? pointer.y) >=
+          boundary.top
+          ? "pinned"
+          : "active"
+        : source.section === "pinned"
+          ? "pinned"
+          : "active";
       // Only pointer movement changes sections; opening the destination moves rows under stationary gestures.
       const previousY = previousPointerY ?? pointer.y;
       previousPointerY = pointer.y;
       if (pointer.x >= boundary.left && pointer.x <= boundary.right) {
-        if (pointer.y < previousY && pointer.y <= boundary.bottom) boundarySection = "pinned";
-        else if (pointer.y > previousY && pointer.y >= boundary.top) boundarySection = "active";
+        if (pointer.y < previousY && pointer.y <= boundary.bottom)
+          boundarySection = pinsBelowActive ? "active" : "pinned";
+        else if (pointer.y > previousY && pointer.y >= boundary.top)
+          boundarySection = pinsBelowActive ? "pinned" : "active";
         const nextHeader = (["working-header", "snoozed-header", "settled-header"] as const)
           .map((marker) =>
             args.droppableContainers.find((container) => container.id === sidebarMarkerId(marker)),
           )
           .find((container) => container !== undefined);
         const activeBottom = nextHeader?.node.current?.getBoundingClientRect().top;
-        if (boundarySection === "pinned" || (activeBottom != null && pointer.y < activeBottom)) {
+        if (
+          pinsBelowActive
+            ? boundarySection === "active" || (activeBottom != null && pointer.y < activeBottom)
+            : boundarySection === "pinned" || (activeBottom != null && pointer.y < activeBottom)
+        ) {
           const target = collisions.find((collision) => {
             const id = String(collision.id);
             if (!sections.has(id)) {
@@ -99,12 +123,18 @@ export function createSidebarSortingStrategy(input: {
   routeThreadKey?: string | null;
   snoozedThreadCount?: number;
   cardHeight?: number;
+  cardBaseHeight?: number;
+  pinnedBaseHeight?: number;
+  pinnedExpanded?: boolean;
   slimHeight?: number;
   boundaryLabelHeight?: number;
 }): SortingStrategy {
   if (input.enabled === false) return () => stationary;
   const { items } = input;
   const indices = new Map(items.map((item, index) => [sidebarListItemId(item), index]));
+  const pinsBelowActive =
+    (indices.get(sidebarMarkerId("pinned-header")) ?? -1) >
+    (indices.get(sidebarMarkerId("pinned-divider")) ?? -1);
   let previous: Pick<Layout, "rects" | "activeIndex" | "overIndex"> | undefined;
   let transforms: ReturnType<SortingStrategy>[] | null = [];
 
@@ -122,24 +152,34 @@ export function createSidebarSortingStrategy(input: {
       settled: [],
     };
     let cardHeight = input.cardHeight;
+    let pinnedHeight: number | undefined;
+    const cardBaseHeight = input.cardBaseHeight ?? 82;
+    const pinnedBaseHeight = input.pinnedBaseHeight ?? cardBaseHeight;
     let slimHeight = input.slimHeight;
     let headerScale: number | undefined;
     for (const [index, item] of items.entries()) {
       if (item.kind === "marker") {
-        if (isShelfHeader(item)) {
+        if (isShelfHeader(item) && item.marker !== "pinned-header") {
           const height = rects[index]?.height;
           if (height) headerScale ??= height / 32;
         }
         continue;
       }
-      if (item.section === "pinned" || item.section === "active" || item.section === "working")
+      if (item.section === "pinned") pinnedHeight ??= rects[index]?.height;
+      else if (item.section === "active" || item.section === "working")
         cardHeight ??= rects[index]?.height;
       else slimHeight ??= rects[index]?.height;
       if (item.key !== active.key) groups[item.section].push(item);
     }
     const scale =
-      slimHeight !== undefined ? slimHeight / 36 : (headerScale ?? (cardHeight ?? 82) / 82);
-    cardHeight ??= 82 * scale;
+      slimHeight !== undefined
+        ? slimHeight / 36
+        : (headerScale ??
+          (cardHeight !== undefined
+            ? cardHeight / cardBaseHeight
+            : (pinnedHeight ?? pinnedBaseHeight) / pinnedBaseHeight));
+    cardHeight ??= cardBaseHeight * scale;
+    pinnedHeight ??= pinnedBaseHeight * scale;
     slimHeight ??= 36 * scale;
     const labelHeight = (input.boundaryLabelHeight ?? 0) * scale;
     const group = groups[target.section];
@@ -172,10 +212,16 @@ export function createSidebarSortingStrategy(input: {
       if (groups[name].length > 0) projected.push(...groups[name]);
       else marker(`${name}-placeholder`);
     };
+    if (pinsBelowActive) {
+      marker("pinned-divider");
+      section("active");
+    }
     marker("pinned-header");
-    projected.push(...groups.pinned);
-    marker("pinned-divider");
-    section("active");
+    if (input.pinnedExpanded !== false) projected.push(...groups.pinned);
+    if (!pinsBelowActive) {
+      marker("pinned-divider");
+      section("active");
+    }
     if (items.some((item) => item.kind === "marker" && item.marker === "working-header")) {
       marker("working-header");
       projected.push(...groups.working);
@@ -194,21 +240,26 @@ export function createSidebarSortingStrategy(input: {
       const index = indices.get(sidebarListItemId(item));
       const rect = index === undefined ? undefined : rects[index];
       const fallback =
-        item.kind === "thread" &&
-        (item.section === "pinned" || item.section === "active" || item.section === "working")
-          ? cardHeight
-          : slimHeight;
+        item.kind === "thread" && item.section === "pinned"
+          ? pinnedHeight
+          : item.kind === "thread" && (item.section === "active" || item.section === "working")
+            ? cardHeight
+            : slimHeight;
       const moved = item.kind === "thread" && item.key === active.key;
       return item.kind === "marker" &&
         (item.marker === "pinned-header" || item.marker === "pinned-divider")
-        ? labelHeight
+        ? Math.max(labelHeight, rect?.height ?? 0)
         : item.kind === "marker" && item.marker.endsWith("placeholder")
           ? slimHeight
           : moved
             ? fallback
             : (rect?.height ?? fallback);
     });
-    const firstShelf = items.findIndex(isShelfHeader);
+    const firstShelf = items.findIndex(
+      (item) =>
+        isShelfHeader(item) &&
+        (pinsBelowActive || item.kind !== "marker" || item.marker !== "pinned-header"),
+    );
     const shelfRect = rects[firstShelf];
     const beforeShelf = rects[firstShelf - 1];
     const lastRect = rects.at(-1);
