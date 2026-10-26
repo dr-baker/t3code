@@ -382,5 +382,18 @@ describe("ClientSettings personal sidebar", () => {
     }
     expect(() => decodeClientSettingsPatch({ sidebarCompactCards: "yes" })).toThrow();
   });
+});
 
+describe("ClientSettings single-line sidebar", () => {
+  it("defaults single-line threads off and persists either layout", () => {
+    expect(decodeClientSettings({}).sidebarSingleLineThreads).toBe(false);
+    expect(decodeClientSettings({ sidebarCompactPins: true }).sidebarSingleLineThreads).toBe(false);
+    for (const sidebarSingleLineThreads of [false, true]) {
+      const patch = decodeClientSettingsPatch({ sidebarSingleLineThreads });
+      expect(decodeClientSettings(JSON.parse(JSON.stringify(patch))).sidebarSingleLineThreads).toBe(
+        sidebarSingleLineThreads,
+      );
+    }
+    expect(() => decodeClientSettingsPatch({ sidebarSingleLineThreads: "yes" })).toThrow();
+  });
 });

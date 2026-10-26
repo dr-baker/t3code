@@ -32,12 +32,14 @@ function layout(
   over: string,
   scale = 1,
   cardHeight = 82,
+  pinnedHeight = cardHeight,
 ) {
   let top = 100;
   const rects = items.map((item) => {
     const height =
       item.kind === "thread"
-        ? (item.section === "pinned" || item.section === "active" ? cardHeight : 36) * scale
+        ? (item.section === "pinned" ? pinnedHeight : item.section === "active" ? cardHeight : 36) *
+          scale
         : item.marker === "pinned-header" || item.marker === "pinned-divider"
           ? 0
           : (item.marker.endsWith("placeholder") ? 0 : 32) * scale;
@@ -118,6 +120,59 @@ describe("sidebar collision detection", () => {
       expect(detector(args).map((collision) => collision.id)).toEqual(["source"]);
     },
   );
+
+  it("can pin a settled thread dragged upward into the bottom drawer", () => {
+    const items = [
+      divider,
+      thread("a", "active"),
+      pinnedHeader,
+      thread("p", "pinned"),
+      settledHeader,
+      thread("source", "settled"),
+    ];
+    const { rects, activeIndex } = layout(items, "source", "p");
+    const sourceRect = rects[activeIndex]!;
+    const pinRect = rects[3]!;
+    const boundaryNode = {
+      querySelector: () => ({
+        getBoundingClientRect: () => ({ top: 180, bottom: 196, left: 0, right: 260 }),
+      }),
+    } as unknown as HTMLElement;
+    const detector = createSidebarCollisionDetection(() => true, {
+      items,
+      activationY: sourceRect.top,
+    });
+    const args = {
+      ...collisionArgs(),
+      active: {
+        id: "source",
+        data: { current: {} },
+        rect: { current: { initial: sourceRect, translated: pinRect } },
+      },
+      collisionRect: pinRect,
+      pointerCoordinates: { x: 130, y: pinRect.top + pinRect.height / 2 },
+      droppableRects: new Map(items.map((item, index) => [sidebarListItemId(item), rects[index]!])),
+      droppableContainers: items.map((item, index) => ({
+        id: sidebarListItemId(item),
+        key: sidebarListItemId(item),
+        disabled: false,
+        data: { current: {} },
+        node: {
+          current:
+            item === pinnedHeader
+              ? boundaryNode
+              : item === settledHeader
+                ? ({
+                    getBoundingClientRect: () => ({ top: rects[index]!.top }),
+                  } as unknown as HTMLElement)
+                : null,
+        },
+        rect: { current: rects[index]! },
+      })),
+    };
+    const over = detector(args)[0]!;
+    expect(resolveSidebarDropTarget(items, "source", String(over.id))?.section).toBe("pinned");
+  });
 
   it.each([
     { sourceSection: "active", pins: 0 },
@@ -220,6 +275,84 @@ describe("sidebar collision detection", () => {
 });
 
 describe("sidebar drag projection", () => {
+  it("keeps the bottom pin drawer anchored when a thread drops into its collapsed preview", () => {
+    const items = [
+      divider,
+      thread("a1", "active"),
+      thread("a2", "active"),
+      pinnedHeader,
+      marker("working-header"),
+      thread("w", "working"),
+      settledHeader,
+      thread("s", "settled"),
+    ];
+    const args = layout(items, "a1", sidebarMarkerId("pinned-header"));
+    let top = 100;
+    args.rects = items.map((item) => {
+      if (item.kind === "marker" && item.marker === "pinned-header") top += 200;
+      const height =
+        item.kind === "thread"
+          ? item.section === "settled"
+            ? 36
+            : 82
+          : item.marker === "pinned-header"
+            ? 76
+            : item.marker === "pinned-divider"
+              ? 0
+              : 32;
+      const rect = { top, height, bottom: top + height, left: 0, right: 260, width: 260 };
+      top += height + 1;
+      return rect;
+    });
+    args.activeNodeRect = args.rects[args.activeIndex]!;
+    const strategy = createSidebarSortingStrategy({
+      items,
+      pinnedExpanded: false,
+      settledOrder: ["s"],
+      settledExpanded: true,
+    });
+    expect(strategy({ ...args, index: 2 })?.y).toBe(-83);
+    for (const index of [3, 4, 5, 6, 7]) expect(strategy({ ...args, index })).toEqual(stationary);
+  });
+
+  it("reorders and moves threads between Active and bottom pins without including Working", () => {
+    const items = [
+      divider,
+      thread("a1", "active"),
+      thread("a2", "active"),
+      pinnedHeader,
+      thread("p1", "pinned"),
+      thread("p2", "pinned"),
+      marker("working-header"),
+      thread("w", "working"),
+      settledHeader,
+      thread("s", "settled"),
+    ];
+    expect(resolveSidebarDropTarget(items, "p2", "p1")).toEqual({
+      section: "pinned",
+      pinnedOrder: ["p2", "p1"],
+      activeOrder: ["a1", "a2"],
+    });
+    expect(resolveSidebarDropTarget(items, "p2", sidebarMarkerId("pinned-header"))).toEqual({
+      section: "pinned",
+      pinnedOrder: ["p2", "p1"],
+      activeOrder: ["a1", "a2"],
+    });
+    expect(resolveSidebarDropTarget(items, "a1", sidebarMarkerId("pinned-header"))).toEqual({
+      section: "pinned",
+      pinnedOrder: ["a1", "p1", "p2"],
+      activeOrder: ["a2"],
+    });
+    expect(resolveSidebarDropTarget(items, "p1", "a2")).toEqual({
+      section: "active",
+      pinnedOrder: ["p2"],
+      activeOrder: ["a1", "p1", "a2"],
+    });
+    expect(resolveSidebarDropTarget(items, "a1", "w")).toBeNull();
+    expect(resolveSidebarDropTarget(items, "p1", sidebarMarkerId("settled-header"))?.section).toBe(
+      "settled",
+    );
+  });
   it.each([
     ["a2", "a1"],
     ["p", "a1"],
@@ -567,6 +700,27 @@ describe("sidebar drag projection", () => {
       expect(returning.get(placeholderId)?.scaleY).toBe(0);
     },
   );
+
+  it.each([0.75, 1])("uses destination heights for compact pins at scale %s", (scale) => {
+    const items = [
+      pinnedHeader,
+      thread("p", "pinned"),
+      divider,
+      thread("a", "active"),
+      settledHeader,
+      marker("settled-placeholder"),
+    ];
+    const strategy = createSidebarSortingStrategy({
+      items,
+      pinnedBaseHeight: 36,
+      settledOrder: [],
+      settledExpanded: false,
+    });
+    const unpin = layout(items, "p", "a", scale, 82, 36);
+    expect(strategy({ ...unpin, index: 4 })?.y).toBeCloseTo(46 * scale);
+    const pin = layout(items, "a", sidebarMarkerId("pinned-header"), scale, 82, 36);
+    expect(strategy({ ...pin, index: 1 })?.y).toBeCloseTo(36 * scale + 1);
+  });
 
   it("uses shelf height for empty target sizing when card height differs from its default", () => {
     const items = [

@@ -1138,6 +1138,29 @@ describe("Working shelf (beta)", () => {
   });
 
   describe("dragging", () => {
+    it("keeps surfaced pin slots between the correct neighbors when arranging resting pins", () => {
+      const plan = planSidebarThreadDrop({
+        activeKey: "moving",
+        activeSection: "pinned",
+        target: { section: "pinned", pinnedOrder: ["first", "moving", "last"], activeOrder: [] },
+        pinnedOrder: ["first", "surfaced", "last", "moving"],
+        pinnedKeysById: new Map([
+          ["first", "a"],
+          ["surfaced", "c"],
+          ["last", "m"],
+          ["moving", "z"],
+        ]),
+        activeOrder: ["surfaced"],
+        activeKeysById: new Map(),
+      });
+      expect(plan.kind).toBe("reorder-pinned");
+      if (plan.kind !== "reorder-pinned") return;
+      expect(plan.assignments).toHaveLength(1);
+      const assignment = plan.assignments[0]!;
+      expect(assignment.id).toBe("moving");
+      expect(assignment.orderKey > "c" && assignment.orderKey < "m").toBe(true);
+    });
+
     const marker = (name: SidebarListMarker): SidebarListItem => ({ kind: "marker", marker: name });
     const row = (key: string, section: SidebarSection): SidebarListItem => ({
       kind: "thread",

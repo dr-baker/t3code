@@ -62,11 +62,16 @@ files directly; see [Attach files](./composer.md#attach-files).
 On web and desktop, pinning or unpinning a thread keeps the sidebar at your current
 scroll position instead of following the thread to its new place in the list.
 
-Pinning does not prevent automatic settlement. Settling a thread removes its pin.
+On web and desktop, Pinned is a thread's resting place while it is inactive or working.
+Questions, approvals, failures, limits, unread answers, and snooze wakes bring it into Active
+without removing its pin. Once handled, it returns to its saved pin position. Automatic
+settlement leaves pinned threads alone. Settling a thread removes its pin; snoozing moves it
+to Snoozed until it wakes.
 
-On web and desktop, drag a thread between sections to change its state. Drag a thread up into
-the pinned section to pin it at the spot you drop it; drag a pinned thread down into the active
-list to unpin it. Dragging a thread onto the **Settled** header settles it, and dragging a settled
+On web and desktop, drag a thread between sections to change its state. Drag a thread into
+the pinned section to pin it at the spot you drop it; drag a resting pin into the active
+list to unpin it. Reordering a pinned thread that surfaced in Active keeps its saved pin.
+Dragging a thread onto the **Settled** header settles it, and dragging a settled
 thread into the active list un-settles it. A snoozed thread can be dragged out of the snoozed
 shelf, which wakes it, but threads cannot be dragged into the shelf because snoozing needs a wake
 time. Dragging a pinned thread out of the pinned section does not ask for unpin confirmation.
@@ -74,9 +79,10 @@ Pinned and active boundary labels appear only while dragging, without moving the
 other rows slide aside to show where the thread will land. When you cross into another section,
 the dragged thread shows the action the drop performs, with its icon: **Pin**, **Unpin**,
 **Settle**, **Un-settle**, or **Wake**. Its status and hover actions hide during the drag. A pinned
-thread keeps its pin only while it stays in the pinned section; once it leaves, the badge takes
-over. Reordering within the same section shows no badge. When there are no pins, drag to the top
-edge to pin a thread. Section labels stay readable for the whole drag, and the section the
+thread dragged out of its resting section loses its pin; a thread surfaced for attention keeps
+its pin when reordered within Active. Reordering within the same section shows no badge.
+When there are no resting pins, drag to the Pinned target above the bottom sections to pin a
+thread. Section labels stay readable for the whole drag, and the section the
 thread is over takes the accent color. Section labels also
 identify empty sections and a collapsed settled shelf.
 

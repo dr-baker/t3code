@@ -170,10 +170,11 @@ export function resolveSidebarThreadSection(input: {
   readonly snoozed: boolean;
   readonly settled: boolean;
   readonly pinned: boolean;
+  readonly pinnedNeedsAttention?: boolean;
 }): SidebarSection {
   if (input.snoozed) return "snoozed";
   if (input.settled) return "settled";
-  if (input.pinned) return "pinned";
+  if (input.pinned && !input.pinnedNeedsAttention) return "pinned";
   return "active";
 }
 
@@ -205,7 +206,8 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
   for (let i = 0; i < index && i < items.length; i += 1) {
     const item = items[i]!;
     if (item.kind !== "marker") continue;
-    if (item.marker === "pinned-divider") section = "active";
+    if (item.marker === "pinned-header") section = "pinned";
+    else if (item.marker === "pinned-divider") section = "active";
     else if (item.marker === "working-header") section = "working";
     else if (item.marker === "snoozed-header") section = "snoozed";
     else if (item.marker === "settled-header") section = "settled";
@@ -229,10 +231,31 @@ export function resolveSidebarDropTarget(
   if (activeIndex === -1 || overIndex === -1 || items[activeIndex]?.kind !== "thread") return null;
   const moved = items.filter((_, index) => index !== activeIndex);
   moved.splice(overIndex, 0, items[activeIndex]!);
-  const section = sectionAtSidebarSlot(moved, overIndex);
+  const pinsBelowActive =
+    items.findIndex((item) => item.kind === "marker" && item.marker === "pinned-header") >
+    items.findIndex((item) => item.kind === "marker" && item.marker === "pinned-divider");
+  const over = items[overIndex]!;
+  const section = pinsBelowActive
+    ? over.kind === "thread"
+      ? over.section
+      : over.marker === "pinned-header"
+        ? "pinned"
+        : over.marker === "settled-header" || over.marker === "settled-placeholder"
+          ? "settled"
+          : sectionAtSidebarSlot(items, overIndex + 1)
+    : sectionAtSidebarSlot(moved, overIndex);
   if (section === "working" || section === "snoozed") return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
+  if (pinsBelowActive) {
+    for (const item of moved) {
+      if (item.kind !== "thread") continue;
+      const destination = item.key === activeKey ? section : item.section;
+      if (destination === "pinned") pinnedOrder.push(item.key);
+      else if (destination === "active") activeOrder.push(item.key);
+    }
+    return { section, pinnedOrder, activeOrder };
+  }
   let currentSection: SidebarSection = "pinned";
   for (const item of moved) {
     if (item.kind === "marker") {
@@ -383,7 +406,7 @@ export function planSidebarThreadDrop(input: {
         kind: "move-active",
         order,
         assignments,
-        unpin: activePinned,
+        unpin: activePinned && activeSection !== "active",
         unsettle: activeSettled,
         unsnooze: activeSection === "snoozed",
       };
@@ -391,15 +414,28 @@ export function planSidebarThreadDrop(input: {
     case "settled":
       return activeSection === "settled" ? { kind: "none" } : { kind: "settle" };
     case "pinned": {
+      // A surfaced pin already owns its resting position. Handling its
+      // attention state returns it there; dragging cannot dismiss that state.
+      if (activeSection === "active" && activePinned) return { kind: "none" };
       const order = target.pinnedOrder;
+      // Surfaced pins still occupy saved slots, even though only resting pins
+      // participate in the drawer's sortable context.
+      const completeOrder = (() => {
+        if (pinnedOrder.every((key) => key === activeKey || order.includes(key))) return order;
+        const remaining = pinnedOrder.filter((key) => key !== activeKey);
+        const nextKey = order[order.indexOf(activeKey) + 1];
+        const nextIndex = nextKey === undefined ? remaining.length : remaining.indexOf(nextKey);
+        remaining.splice(nextIndex < 0 ? remaining.length : nextIndex, 0, activeKey);
+        return remaining;
+      })();
       if (
         activeSection === "pinned" &&
-        order.length === pinnedOrder.length &&
-        order.every((key, index) => key === pinnedOrder[index])
+        completeOrder.length === pinnedOrder.length &&
+        completeOrder.every((key, index) => key === pinnedOrder[index])
       ) {
         return { kind: "none" };
       }
-      const assignments = arrange(order, pinnedKeysById, reorderableKeys);
+      const assignments = arrange(completeOrder, pinnedKeysById, reorderableKeys);
       if (assignments === null) return { kind: "none" };
       if (activeSection === "pinned") {
         return assignments.length === 0
@@ -430,7 +466,13 @@ export function applySidebarThreadDrop<
     | "settledOverride"
     | "unsettledAt"
   >,
->(thread: T, section: "pinned" | "active" | "settled", now: string, orderKey?: string): T {
+>(
+  thread: T,
+  section: "pinned" | "active" | "settled",
+  now: string,
+  orderKey?: string,
+  preservePin = false,
+): T {
   const wasSettled = thread.settledOverride === "settled";
   const awake = { ...thread, snoozedAt: null, snoozedUntil: null };
   if (section === "settled") {
@@ -449,8 +491,14 @@ export function applySidebarThreadDrop<
     : awake;
   return {
     ...resumed,
-    pinnedAt: section === "pinned" ? (thread.pinnedAt ?? now) : null,
-    pinOrderKey: section === "pinned" ? (orderKey ?? thread.pinOrderKey) : null,
+    pinnedAt:
+      section === "pinned" ? (thread.pinnedAt ?? now) : preservePin ? thread.pinnedAt : null,
+    pinOrderKey:
+      section === "pinned"
+        ? (orderKey ?? thread.pinOrderKey)
+        : preservePin
+          ? thread.pinOrderKey
+          : null,
     ...(section === "active" && orderKey !== undefined ? { activeOrderKey: orderKey } : {}),
   };
 }

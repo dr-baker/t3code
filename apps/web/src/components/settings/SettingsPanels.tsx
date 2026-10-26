@@ -439,6 +439,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarCompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarCompactCards
       ? ["Compact sidebar items"]
       : []),
+    ...(settings.sidebarSingleLineThreads !== DEFAULT_UNIFIED_SETTINGS.sidebarSingleLineThreads
+      ? ["Single-line sidebar threads"]
+      : []),
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? ["Working section"]
       : []),
@@ -610,6 +613,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarCompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarCompactCards,
+      sidebarSingleLineThreads: DEFAULT_UNIFIED_SETTINGS.sidebarSingleLineThreads,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
@@ -874,6 +878,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarCompactCards: Boolean(checked) })
               }
               aria-label="Compact sidebar items"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("single-line-sidebar-threads")}
+          description="Show sidebar threads as a project icon and title. Hover for the time and thread actions."
+          resetAction={
+            settings.sidebarSingleLineThreads !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarSingleLineThreads ? (
+              <SettingResetButton
+                label="single-line sidebar threads"
+                onClick={() =>
+                  updateSettings({
+                    sidebarSingleLineThreads: DEFAULT_UNIFIED_SETTINGS.sidebarSingleLineThreads,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarSingleLineThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarSingleLineThreads: Boolean(checked) })
+              }
+              aria-label="Single-line sidebar threads"
             />
           }
         />

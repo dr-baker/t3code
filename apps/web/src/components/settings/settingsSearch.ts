@@ -416,6 +416,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["sidebar thread rows metadata provider icons compact expanded"],
   },
   {
+    id: "single-line-sidebar-threads",
+    title: "Single-line sidebar threads",
+    to: "/settings/general",
+    searchTerms: ["sidebar threads compact rows project icon title hover actions time"],
+  },
+  {
     id: "working-shelf",
     title: "Working section",
     to: "/settings/general",
