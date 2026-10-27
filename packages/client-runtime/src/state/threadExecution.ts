@@ -251,6 +251,8 @@ export function deriveThreadStructureRuntime(
   }
   const activeRunId =
     latestMatchingRun(projection, (run) => INTERRUPTIBLE_RUN_STATUSES.has(run.status))?.id ?? null;
+  const updateError =
+    projection.updateError?.runId === liveActivityRun?.id ? projection.updateError : undefined;
   return {
     status: usageLimitedRun
       ? "failed"
@@ -268,6 +270,13 @@ export function deriveThreadStructureRuntime(
       latestRootProviderFailure(latestRunProjection, projection.turnItems),
       providerSession?.lastError ?? null,
     ),
+    ...(updateError === undefined
+      ? {}
+      : {
+          lastError: updateError.message,
+          lastErrorClass: "unknown" as const,
+          lastErrorCode: "update_stream_failed",
+        }),
   };
 }
 

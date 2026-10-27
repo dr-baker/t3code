@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId, type ThreadPullRequestLink } from "@t3tools/contracts";
+import { ProjectId, RunId, ThreadId, type ThreadPullRequestLink } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { v2Project, v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
@@ -27,6 +27,31 @@ const otherIdentity = {
 };
 
 describe("applyShellStreamEvent", () => {
+  it("shows update failures without advancing the durable cursor and clears them on recovery", () => {
+    const error = {
+      threadId: v2ThreadShell.id,
+      runId: RunId.make("live-run"),
+      message: "Cannot save thread updates.",
+    };
+    const snapshot = { ...v2ShellSnapshot, snapshotSequence: 5, threads: [v2ThreadShell] };
+    const failed = applyShellStreamEvent(snapshot, { kind: "update-errors", errors: [error] });
+    expect(failed.snapshotSequence).toBe(5);
+    expect(failed.threads[0]?.updateError).toEqual(error);
+    const retained = applyShellStreamEvent(
+      { ...failed, threads: [{ ...failed.threads[0]!, activeRunId: error.runId }] },
+      {
+        kind: "thread.updated",
+        location: "active",
+        sequence: 6,
+        thread: { ...v2ThreadShell, activeRunId: error.runId, title: "Renamed" },
+      },
+    );
+    expect(retained.threads[0]?.updateError).toEqual(error);
+    const recovered = applyShellStreamEvent(failed, { kind: "update-errors", errors: [] });
+    expect(recovered.threads[0]?.updateError).toBeUndefined();
+    expect(recovered.snapshotSequence).toBe(5);
+  });
+
   it("ignores stale project updates without mutating the snapshot", () => {
     const snapshotWithProject = {
       ...v2ShellSnapshot,

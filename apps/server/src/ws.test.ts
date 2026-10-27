@@ -1,9 +1,11 @@
+import * as RunUpdateErrors from "./orchestration-v2/RunUpdateErrors.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   AuthSessionId,
   EnvironmentId,
   ProjectId,
+  RunId,
   ThreadId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -11,6 +13,10 @@ import {
   WsServerRefreshProvidersRpc,
   WsSubscribeServerConfigRpc,
   type OrchestrationV2StoredEvent,
+  type OrchestrationV2ThreadStreamItem,
+  type OrchestrationV2ShellStreamItem,
+  type OrchestrationV2GetThreadProjectionError,
+  type OrchestrationV2GetShellSnapshotError,
   type OrchestrationV2ThreadShell,
   type OrchestrationProjectShell,
   type ServerConfig,
@@ -182,7 +188,68 @@ it.effect("resends a file manager reveal kind that missed the snapshot", () =>
 );
 
 const ReplayTestLayer = OrchestrationEventStore.layer.pipe(
+  Layer.provideMerge(RunUpdateErrors.layer),
   Layer.provideMerge(SqlitePersistence.layerMemory),
+);
+
+it.effect.each(["thread", "shell"] as const)(
+  "%s sends live update failures independently of persisted events and clears them",
+  (scope) =>
+    Effect.gen(function* () {
+      const errors = yield* RunUpdateErrors.RunUpdateErrors;
+      const threadId = ThreadId.make("thread:live-update-error");
+      const runId = RunId.make("run:live-update-error");
+      yield* errors.report({ threadId, runId, message: "Cannot save thread updates." });
+      const stream: Stream.Stream<
+        OrchestrationV2ThreadStreamItem | OrchestrationV2ShellStreamItem,
+        OrchestrationV2GetThreadProjectionError | OrchestrationV2GetShellSnapshotError
+      > =
+        scope === "thread"
+          ? yield* subscribeOrchestrationV2Thread({
+              threadId,
+              afterSequence: 0,
+              includeUpdateErrors: true,
+            })
+          : yield* subscribeOrchestrationV2Shell({ afterSequence: 0, includeUpdateErrors: true });
+      const received = yield* stream.pipe(
+        Stream.filter((item) => item.kind === "update-errors"),
+        Stream.tap((item) =>
+          item.errors.length > 0 ? errors.clear(threadId, runId) : Effect.void,
+        ),
+        Stream.takeUntil((item) => item.errors.length === 0),
+        Stream.runCollect,
+      );
+      assert.deepEqual(
+        received.map((item) => item.errors.map((error) => error.runId)),
+        [[runId], []],
+      );
+    }).pipe(
+      Effect.provideService(ThreadManagement.ThreadManagementService, {
+        ensureLegacyTranscript: () => Effect.void,
+        streamStoredEventsFrom: () => Stream.never,
+        listActiveSubagentThreadIds: () => Effect.succeed([]),
+      } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+      Effect.provideService(ProjectStore.ProjectStoreV2, {
+        listShells: () => Effect.succeed([]),
+      } as unknown as ProjectStore.ProjectStoreV2["Service"]),
+      Effect.provideService(
+        ProjectService.ProjectService,
+        {} as ProjectService.ProjectService["Service"],
+      ),
+      Effect.provideServiceEffect(
+        ProjectEnrichment.ProjectEnrichmentService,
+        PubSub.unbounded().pipe(
+          Effect.map(
+            (changes) =>
+              ({
+                subscribeChanges: PubSub.subscribe(changes),
+              }) as unknown as ProjectEnrichment.ProjectEnrichmentService["Service"],
+          ),
+        ),
+      ),
+      Effect.provide(ReplayTestLayer),
+      Effect.scoped,
+    ),
 );
 
 it.live.each(["thread", "shell"] as const)(
@@ -393,6 +460,7 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
 
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
+  RunUpdateErrors.layer,
   Layer.mock(DocumentText.DocumentText)({}),
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.mock(WorkspacePaths.WorkspacePaths)({}),

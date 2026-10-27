@@ -1,3 +1,4 @@
+import * as RunUpdateErrors from "../src/orchestration-v2/RunUpdateErrors.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Measures real local HTTP/WebSocket sockets.
 import * as NodeHttp from "node:http";
 import * as NodeUtil from "node:util";
@@ -131,6 +132,7 @@ const layerEnrichment = Layer.unwrap(
   }),
 );
 const layerServices = layerManagement.pipe(
+  Layer.provideMerge(RunUpdateErrors.layer),
   Layer.provideMerge(
     Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
       getEnvironmentId: Effect.succeed(EnvironmentId.make("transfer-test")),

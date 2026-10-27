@@ -22,6 +22,23 @@ import { canSnooze, effectiveSnoozed } from "./threadSettled.ts";
 const environmentId = EnvironmentId.make("environment-v2");
 
 describe("V2 client presentation", () => {
+  it("shows an update failure while preserving the saved run status", () => {
+    const runId = RunId.make("run-update-failure");
+    const shell = {
+      ...v2ThreadShell,
+      status: "running" as const,
+      latestRunId: runId,
+      activeRunId: runId,
+      updateError: { threadId: v2ThreadShell.id, runId, message: "Cannot save updates." },
+    };
+    const failed = presentThreadShell(environmentId, shell);
+    expect(failed.runtime).toMatchObject({ status: "running", lastError: "Cannot save updates." });
+    expect(isThreadWorking(failed)).toBe(true);
+    expect(
+      isThreadWorking(presentThreadShell(environmentId, { ...shell, updateError: undefined })),
+    ).toBe(true);
+  });
+
   it("keeps async questions in Working until the run completes", () => {
     const runId = RunId.make("run-async-question");
     const running = {
