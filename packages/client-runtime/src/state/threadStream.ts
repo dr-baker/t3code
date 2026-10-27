@@ -52,6 +52,20 @@ export function applyThreadStreamItem(
       historyCursor: item.hasMoreHistory === true ? (item.historyCursor ?? null) : null,
     };
   }
+  if (item.kind === "update-errors") {
+    return {
+      ...state,
+      projection:
+        state.projection === null
+          ? null
+          : {
+              ...state.projection,
+              updateError: item.errors.find(
+                (error) => error.threadId === state.projection?.thread.id,
+              ),
+            },
+    };
+  }
   if (item.kind === "synchronized" || item.sequence <= state.sequence) return state;
   if (item.kind === "unknown-event") return { ...state, sequence: item.sequence };
   const projection =

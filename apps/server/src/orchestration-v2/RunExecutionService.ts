@@ -1,3 +1,4 @@
+import * as RunUpdateErrors from "./RunUpdateErrors.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
@@ -695,6 +696,7 @@ export class RunExecutionServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   RunExecutionServiceV2,
   never,
+  | RunUpdateErrors.RunUpdateErrors
   | CheckpointService.CheckpointServiceV2
   | EventSink.EventSinkV2
   | IdAllocator.IdAllocatorV2
@@ -708,6 +710,7 @@ export const layer: Layer.Layer<
   RunExecutionServiceV2,
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
+    const updateErrors = yield* RunUpdateErrors.RunUpdateErrors;
     const checkpointService = yield* CheckpointService.CheckpointServiceV2;
     const eventSink = yield* EventSink.EventSinkV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -2078,6 +2081,12 @@ export const layer: Layer.Layer<
                     if (runtimeLost) yield* endWorkLostAfterRootRun(completedAt);
                     return;
                   }
+                  yield* updateErrors.report({
+                    threadId: input.run.threadId,
+                    runId: input.run.id,
+                    message:
+                      "T3 Code could not receive or save updates for this run. The agent may still be running. Check the server connection, disk space, and logs before retrying.",
+                  });
                   const providerThread = yield* Ref.get(latestProviderThread);
                   // Stop background work too; the failed consumer cannot persist terminal events.
                   const abandonedProviderTurn =
@@ -2189,6 +2198,7 @@ export const layer: Layer.Layer<
                     // write. Only service shutdown or the atomic gate ends recovery.
                     Effect.forkIn(scope),
                     Effect.flatMap(Fiber.join),
+                    Effect.andThen(updateErrors.clear(input.run.threadId, input.run.id)),
                   );
                 }),
             ),

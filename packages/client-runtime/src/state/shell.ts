@@ -329,6 +329,8 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         let sequence = next.snapshot.value.snapshotSequence;
         let removedAt: Map<ThreadId, number> | undefined;
         for (const delta of deltas) {
+          // Update errors are live notices at the current cursor; they never advance it.
+          if (delta.kind === "update-errors") continue;
           if (delta.sequence <= sequence) continue;
           switch (delta.kind) {
             case "thread.removed":
@@ -690,6 +692,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 
         const current = yield* SubscriptionRef.get(state);
         const omission = {
+          includeUpdateErrors: true,
           ...(omitIdleSubagents ? { omitIdleSubagents: true as const } : {}),
           ...(omitOlderSettled ? { omitOlderSettled: true as const } : {}),
         };

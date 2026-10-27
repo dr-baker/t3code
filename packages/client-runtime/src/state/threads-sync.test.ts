@@ -2530,6 +2530,34 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("surfaces an update failure and clears it without advancing the thread cursor", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_PROJECTION });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+      const error = {
+        threadId: THREAD_ID,
+        runId: RunId.make("active"),
+        message: "Cannot save updates.",
+      };
+      yield* Queue.offer(harness.inputs, { kind: "update-errors", errors: [error] });
+      const failed = yield* awaitThreadState(harness.observed, (value) =>
+        Option.exists(
+          value.data,
+          (projection) => projection.updateError?.message === error.message,
+        ),
+      );
+      expect(Option.getOrThrow(failed.data).updateError).toEqual(error);
+      yield* Queue.offer(harness.inputs, { kind: "update-errors", errors: [] });
+      const recovered = yield* awaitThreadState(harness.observed, (value) =>
+        Option.exists(value.data, (projection) => projection.updateError === undefined),
+      );
+      expect(Option.getOrThrow(recovered.data).updateError).toBeUndefined();
+    }),
+  );
+
   it.effect("keeps replayed updates synchronizing until the completion marker arrives", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_PROJECTION, completionMarker: true });
