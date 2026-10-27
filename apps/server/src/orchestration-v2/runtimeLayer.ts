@@ -1,3 +1,4 @@
+import * as ModelCapacityRecoveryWorker from "./ModelCapacityRecoveryWorker.ts";
 import * as RunUpdateErrors from "./RunUpdateErrors.ts";
 import * as WorktreeBranchSync from "./WorktreeBranchSync.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
@@ -424,6 +425,16 @@ export const layerProduction = Layer.mergeAll(
   layerSecretRequestsProvided,
   GuestShareService.layer.pipe(
     Layer.provide(Layer.merge(layerOrchestratorProvided, layerCommandOutputHubProvided)),
+  ),
+  ModelCapacityRecoveryWorker.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        ProjectionStore.layer,
+        layerEventSinkProvided,
+        layerThreadManagementProvided,
+        layerOrchestratorProvided,
+      ),
+    ),
   ),
   UsageLimitRecoveryWorker.layer.pipe(
     Layer.provide(
