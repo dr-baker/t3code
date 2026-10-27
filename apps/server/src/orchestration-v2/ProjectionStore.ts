@@ -163,6 +163,7 @@ export const ProjectionStoreV2Error = Schema.Union([
 export type ProjectionStoreV2Error = typeof ProjectionStoreV2Error.Type;
 
 export type ProjectionRecoveryKind =
+  | "model-capacity"
   | "queued-runs"
   | "runtime"
   | "subagent-results"
@@ -660,6 +661,14 @@ function needsRecovery(
 ): boolean {
   if (projection.thread.deletedAt !== null) return false;
   switch (kind) {
+    case "model-capacity":
+      return projection.turnItems.some(
+        (item) =>
+          item.type === "error" &&
+          item.status === "failed" &&
+          item.failure.class === "provider_error" &&
+          item.failure.code === "serverOverloaded",
+      );
     case "queued-runs":
       return (
         projection.thread.archivedAt === null &&
@@ -3974,6 +3983,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       function* (kind: ProjectionRecoveryKind) {
         const candidates = (() => {
           switch (kind) {
+            case "model-capacity":
+              return sql`
+                SELECT thread_id FROM orchestration_v2_projection_turn_items
+                WHERE type = 'error' AND status = 'failed'
+                  AND json_extract(payload_json, '$.failure.class') = 'provider_error'
+                  AND json_extract(payload_json, '$.failure.code') = 'serverOverloaded'
+              `;
             case "queued-runs":
               return sql`
                 SELECT thread_id FROM orchestration_v2_projection_runs

@@ -1,3 +1,4 @@
+import { modelCapacityRecoveryDeadline } from "./ModelCapacityRecovery.ts";
 import type {
   GuestShareId,
   OrchestrationV2SearchThreadInput,
@@ -5006,6 +5007,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     }
+    if (command.capacityContinuationOfRunId !== undefined) {
+      const now = yield* DateTime.now;
+      const deadline = modelCapacityRecoveryDeadline(
+        projection,
+        command.capacityContinuationOfRunId,
+      );
+      if (
+        command.dispatchMode.type !== "start_immediately" ||
+        deadline === null ||
+        DateTime.toEpochMillis(now) < deadline ||
+        (yield* stopReachedRun(command, command.threadId, command.capacityContinuationOfRunId))
+      ) {
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "thread.metadata-updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: projection.thread,
+        });
+        return;
+      }
+    }
     if (command.usageLimitContinuationOfRunId !== undefined) {
       const run = usageLimitBlockedRun(projection.runs, projection.turnItems, null);
       const failure = latestRootProviderFailure(run, projection.turnItems);
@@ -5626,6 +5651,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         checkpointId: null,
         contextHandoffId: null,
         ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+        ...(command.capacityContinuationOfRunId === undefined
+          ? {}
+          : { capacityContinuationOfRunId: command.capacityContinuationOfRunId }),
         ...(command.restartContinuationOfRunId === undefined
           ? {}
           : { restartContinuationOfRunId: command.restartContinuationOfRunId }),
@@ -5974,6 +6002,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         checkpointId: null,
         contextHandoffId: legacyImportHandoff?.id ?? null,
         ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+        ...(command.capacityContinuationOfRunId === undefined
+          ? {}
+          : { capacityContinuationOfRunId: command.capacityContinuationOfRunId }),
         ...(command.restartContinuationOfRunId === undefined
           ? {}
           : { restartContinuationOfRunId: command.restartContinuationOfRunId }),
