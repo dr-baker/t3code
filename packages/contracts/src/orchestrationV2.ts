@@ -2272,7 +2272,20 @@ export const OrchestrationV2DomainEvent = Schema.Union([
 ]);
 export type OrchestrationV2DomainEvent = typeof OrchestrationV2DomainEvent.Type;
 
+export const OrchestrationV2RunUpdateError = Schema.Struct({
+  threadId: ThreadId,
+  runId: RunId,
+  message: TrimmedNonEmptyString.check(Schema.isMaxLength(4096)),
+});
+export type OrchestrationV2RunUpdateError = typeof OrchestrationV2RunUpdateError.Type;
+
+const OrchestrationV2UpdateErrors = Schema.Struct({
+  kind: Schema.Literal("update-errors"),
+  errors: Schema.Array(OrchestrationV2RunUpdateError),
+});
+
 export const OrchestrationV2ThreadProjection = Schema.Struct({
+  updateError: Schema.optional(OrchestrationV2RunUpdateError),
   thread: OrchestrationV2AppThread,
   runs: Schema.Array(OrchestrationV2Run),
   attempts: Schema.Array(OrchestrationV2RunAttempt),
@@ -2336,6 +2349,7 @@ export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
 export const OrchestrationV2ThreadShell = Schema.Struct({
+  updateError: Schema.optional(OrchestrationV2RunUpdateError),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -2515,6 +2529,7 @@ export const OrchestrationV2ShellResumable = Schema.Struct({
 export type OrchestrationV2ShellResumable = typeof OrchestrationV2ShellResumable.Type;
 
 export const OrchestrationV2ShellStreamItem = Schema.Union([
+  OrchestrationV2UpdateErrors,
   Schema.Struct({
     kind: Schema.Literal("synchronized"),
   }),
@@ -4117,6 +4132,7 @@ export type OrchestrationV2GetThreadProjectionInput =
   typeof OrchestrationV2GetThreadProjectionInput.Type;
 
 export const OrchestrationV2SubscribeShellInput = Schema.Struct({
+  includeUpdateErrors: Schema.optionalKey(Schema.Boolean),
   afterSequence: Schema.optionalKey(NonNegativeInt),
   /**
    * With `afterSequence`, a gap the server cannot replay answers `snapshot-required` instead of
@@ -4238,6 +4254,7 @@ export const OrchestrationV2WorktreeThreadIds = Schema.Struct({
 export type OrchestrationV2WorktreeThreadIds = typeof OrchestrationV2WorktreeThreadIds.Type;
 
 export const OrchestrationV2SubscribeThreadInput = Schema.Struct({
+  includeUpdateErrors: Schema.optionalKey(Schema.Boolean),
   threadId: ThreadId,
   afterSequence: Schema.optionalKey(NonNegativeInt),
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
@@ -4352,6 +4369,7 @@ const OrchestrationV2UnknownThreadStreamEvent = Schema.Struct({
 
 export const OrchestrationV2ThreadStreamItem = withRecordIdTable(
   Schema.Union([
+    OrchestrationV2UpdateErrors,
     Schema.Struct({
       kind: Schema.Literal("synchronized"),
     }),

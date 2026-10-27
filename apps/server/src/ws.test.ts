@@ -1,3 +1,4 @@
+import * as RunUpdateErrors from "./orchestration-v2/RunUpdateErrors.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { WebSocket } from "@effect/platform-node/NodeWS";
@@ -35,6 +36,10 @@ import {
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2StoredEvent,
+  type OrchestrationV2ThreadStreamItem,
+  type OrchestrationV2ShellStreamItem,
+  type OrchestrationV2GetThreadProjectionError,
+  type OrchestrationV2GetShellSnapshotError,
   type OrchestrationV2ThreadShell,
   type OrchestrationProjectShell,
   type ServerConfig,
@@ -298,6 +303,181 @@ it.effect("runs editor, remote open target and direct endpoint discovery side by
 
 const ReplayTestLayer = OrchestrationEventStore.layer.pipe(
   Layer.provideMerge(SqlitePersistence.layerMemory),
+  Layer.provideMerge(RunUpdateErrors.layer),
+);
+
+it.effect.each(["thread", "shell"] as const)(
+  "%s sends live update failures independently of persisted events and clears them",
+  (scope) =>
+    Effect.gen(function* () {
+      const errors = yield* RunUpdateErrors.RunUpdateErrors;
+      const threadId = ThreadId.make("thread:live-update-error");
+      const runId = RunId.make("run:live-update-error");
+      yield* errors.report({ threadId, runId, message: "Cannot save thread updates." });
+      const stream: Stream.Stream<
+        OrchestrationV2ThreadStreamItem | OrchestrationV2ShellStreamItem,
+        OrchestrationV2GetThreadProjectionError | OrchestrationV2GetShellSnapshotError
+      > =
+        scope === "thread"
+          ? yield* subscribeOrchestrationV2Thread({
+              threadId,
+              afterSequence: 0,
+              includeUpdateErrors: true,
+            })
+          : yield* subscribeOrchestrationV2Shell({ afterSequence: 0, includeUpdateErrors: true });
+      const received = yield* stream.pipe(
+        Stream.filter((item) => item.kind === "update-errors"),
+        Stream.tap((item) =>
+          item.errors.length > 0 ? errors.clear(threadId, runId) : Effect.void,
+        ),
+        Stream.takeUntil((item) => item.errors.length === 0),
+        Stream.runCollect,
+      );
+      assert.deepEqual(
+        received.map((item) => item.errors.map((error) => error.runId)),
+        [[runId], []],
+      );
+    }).pipe(
+      Effect.provideService(ThreadManagement.ThreadManagementService, {
+        ensureLegacyTranscript: () => Effect.void,
+        streamStoredEventsFrom: () => Stream.never,
+        listActiveSubagentThreadIds: () => Effect.succeed([]),
+      } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+      Effect.provideService(ProjectStore.ProjectStoreV2, {
+        listShells: () => Effect.succeed([]),
+      } as unknown as ProjectStore.ProjectStoreV2["Service"]),
+      Effect.provideService(
+        ProjectService.ProjectService,
+        {} as ProjectService.ProjectService["Service"],
+      ),
+      Effect.provideServiceEffect(
+        ProjectEnrichment.ProjectEnrichmentService,
+        PubSub.unbounded().pipe(
+          Effect.map(
+            (changes) =>
+              ({
+                subscribeChanges: PubSub.subscribe(changes),
+              }) as unknown as ProjectEnrichment.ProjectEnrichmentService["Service"],
+          ),
+        ),
+      ),
+      Effect.provide(ReplayTestLayer),
+      Effect.scoped,
+    ),
+);
+
+it.live.each(["thread", "shell"] as const)(
+  "%s resume skips unknown types, synchronizes, and receives the live tail",
+  (scope) =>
+    Effect.gen(function* () {
+      const store = yield* OrchestrationEventStore.OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-01-05T00:00:00.000Z";
+      const threadId = ThreadId.make("thread:replay");
+      const projectId = ProjectId.make("project:replay");
+      const project = {
+        id: projectId,
+        title: "Replay",
+        workspaceRoot: "/tmp/replay",
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+      } satisfies OrchestrationProjectShell;
+      const insert = (version: number, unknown = false) => sql<{ sequence: number }>`
+        INSERT INTO orchestration_events (
+          event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+        ) VALUES (
+          ${`replay:${version}`}, ${scope === "thread" ? "thread" : "project"},
+          ${scope === "thread" ? threadId : projectId}, ${version},
+          ${unknown ? "future.event" : scope === "thread" ? "provider-session.detached" : "project.meta-updated"},
+          ${now}, 'server', ${JSON.stringify(
+            scope === "thread"
+              ? { providerSessionId: "session:replay", detachedAt: now }
+              : { projectId, updatedAt: now },
+          )}, '{}', 2
+        ) RETURNING sequence
+      `;
+      const [before] = yield* insert(0);
+      yield* insert(1, true);
+      const [after] = yield* insert(2);
+      const [highWater] = yield* insert(3, true);
+      const updates = yield* PubSub.unbounded();
+      let liveSequence = 0;
+      const consume = <A extends { readonly kind: string; readonly sequence?: number }, E, R>(
+        stream: Stream.Stream<A, E, R>,
+      ) =>
+        stream.pipe(
+          Stream.tap((item) =>
+            Effect.gen(function* () {
+              if (item.kind !== "synchronized") return;
+              const [live] = yield* insert(4);
+              liveSequence = live!.sequence;
+              const events = yield* store
+                .readApplicationEvents({
+                  afterSequence: highWater!.sequence,
+                  throughSequence: liveSequence,
+                })
+                .pipe(Stream.runCollect);
+              yield* store.publishCommitted(events);
+            }),
+          ),
+          Stream.takeUntil((item) => item.sequence === liveSequence),
+          Stream.map((item) => ({ kind: item.kind as string, sequence: item.sequence })),
+          Stream.runCollect,
+        );
+      const subscription = Effect.gen(function* () {
+        return scope === "thread"
+          ? yield* subscribeOrchestrationV2Thread({
+              threadId,
+              afterSequence: before!.sequence,
+              requestCompletionMarker: true,
+            }).pipe(Effect.flatMap(consume))
+          : yield* subscribeOrchestrationV2Shell({
+              afterSequence: before!.sequence,
+              requestCompletionMarker: true,
+            }).pipe(Effect.flatMap(consume));
+      });
+      const items = yield* subscription.pipe(
+        Effect.provideService(ThreadManagement.ThreadManagementService, {
+          ensureLegacyTranscript: () => Effect.void,
+          getShellSnapshot: () => Effect.die("shell resume must not load a full snapshot"),
+          listActiveSubagentThreadIds: () => Effect.succeed([]),
+          streamStoredEventsFrom: (
+            input: Parameters<
+              ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"]
+            >[0],
+          ) => {
+            assert.equal(input?.afterSequence, highWater!.sequence);
+            return store
+              .streamApplicationEvents({ afterSequence: input?.afterSequence ?? 0 })
+              .pipe(
+                Stream.filter((event): event is OrchestrationV2StoredEvent => "event" in event),
+              );
+          },
+        } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+        Effect.provideService(ProjectStore.ProjectStoreV2, {
+          listShells: () => Effect.succeed([]),
+        } as unknown as ProjectStore.ProjectStoreV2["Service"]),
+        Effect.provideService(ProjectService.ProjectService, {
+          getShell: () => Effect.succeedSome(project),
+        } as unknown as ProjectService.ProjectService["Service"]),
+        Effect.provideService(ProjectEnrichment.ProjectEnrichmentService, {
+          subscribeChanges: PubSub.subscribe(updates),
+        } as ProjectEnrichment.ProjectEnrichmentService["Service"]),
+      );
+      assert.deepEqual(
+        items.map((item) => item.kind),
+        scope === "thread"
+          ? ["event", "synchronized", "event"]
+          : ["project.updated", "synchronized", "project.updated"],
+      );
+      assert.deepEqual(
+        items.flatMap((item) => (item.sequence === undefined ? [] : [item.sequence])),
+        [after!.sequence, liveSequence],
+      );
+    }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );
 
 const resumeSkipsUnknownTypes = (scope: "thread" | "shell") =>

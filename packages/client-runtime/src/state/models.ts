@@ -242,6 +242,11 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
   if (thread.latestRunId === null && !parkAtIdle) {
     return null;
   }
+  const updateError =
+    thread.updateError?.runId === (thread.activeRunId ?? thread.latestRunId) &&
+    threadRunStatusIsActive(thread.activityRunStatus ?? thread.status)
+      ? thread.updateError
+      : undefined;
   const status = parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
   return {
     status,
@@ -252,9 +257,9 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
         : nullableIso(thread.activityRunStartedAt),
     providerInstanceId: thread.providerInstanceId,
     providerName: null,
-    lastError: thread.lastError ?? null,
-    lastErrorClass: thread.lastErrorClass ?? null,
-    lastErrorCode: thread.lastErrorCode ?? null,
+    lastError: updateError?.message ?? thread.lastError ?? null,
+    lastErrorClass: updateError ? "unknown" : (thread.lastErrorClass ?? null),
+    lastErrorCode: updateError ? "update_stream_failed" : (thread.lastErrorCode ?? null),
     usageLimitResetAt: thread.usageLimitResetAt ?? null,
     updatedAt: iso(thread.updatedAt),
   };

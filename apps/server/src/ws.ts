@@ -1,3 +1,4 @@
+import * as RunUpdateErrors from "./orchestration-v2/RunUpdateErrors.ts";
 import { GitCommandError, OrchestrationDispatchCommandError } from "@t3tools/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- A synchronous digest inside the pure provider mapping.
 import * as NodeCrypto from "node:crypto";
@@ -914,6 +915,7 @@ const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
 export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
   function* (input: {
     readonly threadId: ThreadId;
+    readonly includeUpdateErrors?: boolean;
     readonly afterSequence?: number;
     readonly requestCompletionMarker?: boolean;
     readonly acceptBoundedSnapshot?: boolean;
@@ -922,6 +924,8 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     readonly acceptDedupedBodies?: boolean;
     readonly acceptCompactIds?: boolean;
   }) {
+    const updateErrors =
+      input.includeUpdateErrors === true ? yield* RunUpdateErrors.RunUpdateErrors : null;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const dedupeBodies = input.acceptDedupedBodies === true;
     // Replay, snapshot, and live tail share one deduper: it must see every delivered record.
@@ -952,6 +956,10 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         .pipe(
           Stream.map(threadStreamEventItem),
           coalesceThreadLiveStream,
+          (stream) =>
+            updateErrors !== null
+              ? Stream.merge(stream, updateErrors.changes(input.threadId))
+              : stream,
           Stream.mapError(
             (cause) =>
               new OrchestrationV2GetThreadProjectionError({
@@ -1146,6 +1154,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
 
 export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subscribeShell")(
   function* (input: {
+    readonly includeUpdateErrors?: boolean;
     readonly afterSequence?: number;
     readonly httpSnapshotFallback?: true;
     readonly knownProjectIdentities?: string;
@@ -1154,6 +1163,8 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     readonly omitOlderSettled?: boolean;
   }) {
     const sql = yield* SqlClient.SqlClient;
+    const updateErrors =
+      input.includeUpdateErrors === true ? yield* RunUpdateErrors.RunUpdateErrors : null;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
     const projects = yield* ProjectStore.ProjectStoreV2;
@@ -1287,6 +1298,8 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
             filter: filterSubagentTranscript,
           }),
         ),
+      ).pipe((stream) =>
+        updateErrors !== null ? Stream.merge(stream, updateErrors.changes()) : stream,
       );
 
     const enrichmentRefreshes = Stream.fromSubscription(enrichmentChanges).pipe(

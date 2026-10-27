@@ -1,3 +1,4 @@
+import * as RunUpdateErrors from "./RunUpdateErrors.ts";
 import * as WorktreeBranchSync from "./WorktreeBranchSync.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
@@ -166,6 +167,7 @@ const layerProviderAuthServiceProvided = ProviderAuthService.layer.pipe(
 const layerRunExecutionServiceProvided = RunExecutionService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      RunUpdateErrors.layer,
       McpAppModelContext.layer,
       PreviewAgentActivity.layer,
       layerCheckpointServiceProvided,
@@ -396,6 +398,7 @@ const layerMcpSignInProvided = McpSignIn.layer.pipe(
 );
 
 export const layer = Layer.mergeAll(
+  RunUpdateErrors.layer,
   layerCommandOutputHubProvided,
   layerOrchestratorProvided,
   layerMcpAppRequestsProvided,

@@ -152,6 +152,31 @@ describe("thread execution presentation", () => {
     expect(deriveProviderExtensionStatuses(null)).toEqual([]);
   });
 
+  it("surfaces a lost update stream and ignores its error once that run ends", () => {
+    const active = run("live-run", 1, "running");
+    const projection = {
+      ...v2Projection,
+      runs: [active],
+      updateError: {
+        threadId: v2Projection.thread.id,
+        runId: active.id,
+        message: "Cannot save thread updates.",
+      },
+    };
+    expect(deriveThreadRuntime(projection)).toMatchObject({
+      status: "running",
+      lastError: "Cannot save thread updates.",
+    });
+    expect(
+      deriveThreadRuntime({ ...projection, runs: [{ ...active, status: "completed" }] }),
+    ).toMatchObject({ status: "completed", lastError: null });
+    expect(threadRuntimeHasInterruptibleRun(deriveThreadRuntime(projection))).toBe(true);
+    expect(deriveThreadRuntime({ ...projection, updateError: undefined })).toMatchObject({
+      status: "running",
+      lastError: null,
+    });
+  });
+
   it("derives the current root failure without inheriting errors from children or previous runs", () => {
     const failed = { ...run("limited", 1, "failed"), rootNodeId: NodeId.make("root") };
     const item = {
