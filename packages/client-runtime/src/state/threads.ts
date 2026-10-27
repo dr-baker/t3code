@@ -605,6 +605,17 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       return;
     }
 
+    if (item.kind === "update-errors") {
+      yield* SubscriptionRef.update(state, (current) => ({
+        ...current,
+        data: Option.map(current.data, (projection) => ({
+          ...projection,
+          updateError: item.errors.find((error) => error.threadId === threadId),
+        })),
+      }));
+      return;
+    }
+
     if (item.kind === "snapshot") {
       yield* SubscriptionRef.set(lastSequence, item.snapshotSequence);
       const hasProgressiveHistory =
@@ -977,6 +988,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               }
             : {}),
           acceptDedupedBodies: true as const,
+          includeUpdateErrors: true,
         };
       }),
       {

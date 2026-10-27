@@ -238,7 +238,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           : Option.match(next.snapshot, {
               onNone: () => null,
               onSome: (snapshot) =>
-                item.sequence > snapshot.snapshotSequence
+                item.kind === "update-errors" || item.sequence > snapshot.snapshotSequence
                   ? applyShellStreamEvent(snapshot, item)
                   : snapshot,
             });
@@ -428,6 +428,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         }
 
         const omission = {
+          includeUpdateErrors: true,
           ...(omitIdleSubagents ? { omitIdleSubagents: true as const } : {}),
           ...(omitOlderSettled ? { omitOlderSettled: true as const } : {}),
         };

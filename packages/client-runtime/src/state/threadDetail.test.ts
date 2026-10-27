@@ -59,6 +59,18 @@ function withItem(item: OrchestrationV2TurnItem, updatedAt = v2Now) {
 }
 
 describe("sameThreadStructure", () => {
+  it("does not retain an update error after an authoritative snapshot clears it", () => {
+    const before = {
+      ...v2Projection,
+      updateError: {
+        threadId: v2Projection.thread.id,
+        runId: RunId.make("failed-updates"),
+        message: "Cannot save updates.",
+      },
+    };
+    expect(sameThreadStructure(before, v2Projection)).toBe(false);
+  });
+
   const before = withItem(assistant);
 
   it("holds through streamed text", () => {

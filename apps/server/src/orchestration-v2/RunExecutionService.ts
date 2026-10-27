@@ -1,3 +1,4 @@
+import * as RunUpdateErrors from "./RunUpdateErrors.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
@@ -590,6 +591,7 @@ export class RunExecutionServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   RunExecutionServiceV2,
   never,
+  | RunUpdateErrors.RunUpdateErrors
   | CheckpointService.CheckpointServiceV2
   | EventSink.EventSinkV2
   | IdAllocator.IdAllocatorV2
@@ -602,6 +604,7 @@ export const layer: Layer.Layer<
   RunExecutionServiceV2,
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
+    const updateErrors = yield* RunUpdateErrors.RunUpdateErrors;
     const checkpointService = yield* CheckpointService.CheckpointServiceV2;
     const eventSink = yield* EventSink.EventSinkV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -1495,11 +1498,17 @@ export const layer: Layer.Layer<
             (cause) =>
               Effect.gen(function* () {
                 const completedAt = yield* DateTime.now;
+                if (yield* Ref.get(rootRunFinalized)) return;
+                yield* updateErrors.report({
+                  threadId: input.run.threadId,
+                  runId: input.run.id,
+                  message:
+                    "T3 Code could not receive or save updates for this run. The agent may still be running. Check the server connection, disk space, and logs before retrying.",
+                });
                 yield* Effect.logWarning("orchestration V2 provider event ingestion failed", {
                   runId: input.run.id,
                   cause,
                 });
-                if (yield* Ref.get(rootRunFinalized)) return;
                 const providerThread = yield* Ref.get(latestProviderThread);
                 const routing = yield* Ref.get(eventRouting);
                 const rootProviderTurn = yield* Ref.get(latestRootProviderTurn);
@@ -1594,6 +1603,7 @@ export const layer: Layer.Layer<
                   // write. Only service shutdown or the atomic gate ends recovery.
                   Effect.forkIn(scope),
                   Effect.flatMap(Fiber.join),
+                  Effect.andThen(updateErrors.clear(input.run.threadId, input.run.id)),
                 );
               }),
           ),

@@ -1,3 +1,4 @@
+import * as RunUpdateErrors from "./RunUpdateErrors.ts";
 import { assert, it } from "@effect/vitest";
 import {
   CheckpointScopeId,
@@ -63,6 +64,7 @@ const layerTurnItemPositionsTest = Layer.mock(TurnItemPositionStore.TurnItemPosi
 });
 
 const layerRunExecutionTest = RunExecutionService.layer.pipe(
+  Layer.provide(RunUpdateErrors.layer),
   Layer.provide(
     Layer.mergeAll(
       McpAppModelContext.layerEmpty,
@@ -878,6 +880,7 @@ it.effect("passes the thread's MCP app context to the provider under a safe key"
   }).pipe(
     Effect.provide(
       RunExecutionService.layer.pipe(
+        Layer.provide(RunUpdateErrors.layer),
         Layer.provide(
           Layer.mergeAll(
             PreviewAgentActivity.layer,
@@ -919,6 +922,7 @@ it.effect("fails the run when its ownership check cannot be read before calling 
     const attemptId = RunAttemptId.make("attempt:run-execution-start-guard-read");
     const providerInstanceId = ProviderInstanceId.make("codex");
     const layerTest = RunExecutionService.layer.pipe(
+      Layer.provide(RunUpdateErrors.layer),
       Layer.provide(
         Layer.mergeAll(
           McpAppModelContext.layerEmpty,
@@ -1121,6 +1125,7 @@ it.effect("starts the provider when checkpoint baseline capture fails", () =>
       }>
     >([]);
     const layerTest = RunExecutionService.layer.pipe(
+      Layer.provide(RunUpdateErrors.layer),
       Layer.provide(
         Layer.mergeAll(
           McpAppModelContext.layerEmpty,
@@ -1241,6 +1246,7 @@ it.effect.each(["failure", "interruption", "stale-attempt", "start-guard"] as co
       const guardedWrites = yield* Ref.make(0);
       const writes = yield* Ref.make<ReadonlyArray<ReadonlyArray<OrchestrationV2DomainEvent>>>([]);
       const layerTest = RunExecutionService.layer.pipe(
+        Layer.provide(RunUpdateErrors.layer),
         Layer.provide(
           Layer.mergeAll(
             McpAppModelContext.layerEmpty,
@@ -1413,6 +1419,7 @@ it.effect("ingests new member threads of an owned child after the root turn term
     const order = yield* Ref.make<ReadonlyArray<string>>([]);
     const origins = yield* Ref.make<ReadonlyArray<readonly [string, unknown]>>([]);
     const layerTest = RunExecutionService.layer.pipe(
+      Layer.provide(RunUpdateErrors.layer),
       Layer.provide(
         Layer.mergeAll(
           McpAppModelContext.layerEmpty,
@@ -1662,6 +1669,7 @@ it.effect("ends a nested native subagent and its thread when the root run is int
     const grandchildRootId = NodeId.make(`node:${key}:grandchild-root`);
     const finalized = yield* Deferred.make<ReadonlyArray<OrchestrationV2DomainEvent>>();
     const layerTest = RunExecutionService.layer.pipe(
+      Layer.provide(RunUpdateErrors.layer),
       Layer.provide(
         Layer.mergeAll(
           McpAppModelContext.layerEmpty,
@@ -2005,6 +2013,7 @@ it.effect(
       const ingested = yield* Ref.make<ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>>([]);
       const ingestionDone = yield* Deferred.make<void>();
       const layerTest = RunExecutionService.layer.pipe(
+        Layer.provide(RunUpdateErrors.layer),
         Layer.provide(
           Layer.mergeAll(
             McpAppModelContext.layerEmpty,
@@ -2576,6 +2585,7 @@ it.effect.each(["failure", "defect", "interrupt-failure", "ownership-lost"] as c
   "stops the live provider and background work before settling an ingestion %s",
   (failureMode) =>
     Effect.gen(function* () {
+      const updateErrors = yield* RunUpdateErrors.make;
       const started = yield* Deferred.make<void>();
       const stopped = yield* Deferred.make<void>();
       const backgroundWorkRunning = yield* Ref.make(true);
@@ -2587,6 +2597,7 @@ it.effect.each(["failure", "defect", "interrupt-failure", "ownership-lost"] as c
       const ids = backgroundScenarioIds(`ingestion:${failureMode}`);
       const { observed, finalEvents } = yield* captureRootRunTermination({
         key: `ingestion:${failureMode}`,
+        updateErrors,
         initialProviderTurnId: null,
         rejectTerminalWrite: failureMode === "ownership-lost",
         shouldFinalizeRun: () => Effect.succeed(true),
@@ -2645,6 +2656,15 @@ it.effect.each(["failure", "defect", "interrupt-failure", "ownership-lost"] as c
           ),
         beforeTerminalWrite: () =>
           Effect.gen(function* () {
+            const live = yield* Stream.runHead(updateErrors.changes(ids.threadId));
+            assert.equal(live._tag, "Some");
+            if (live._tag === "Some") {
+              assert.equal(live.value.errors[0]?.runId, ids.runId);
+              assert.include(
+                live.value.errors[0]?.message ?? "",
+                "could not receive or save updates",
+              );
+            }
             const calls = yield* Ref.get(interrupts);
             assert.equal(calls.length, 1);
             assert.equal(calls[0]?.providerTurnId, ids.rootProviderTurnId);
@@ -2653,6 +2673,8 @@ it.effect.each(["failure", "defect", "interrupt-failure", "ownership-lost"] as c
             return true;
           }),
       });
+      const recovered = yield* Stream.runHead(updateErrors.changes(ids.threadId));
+      assert.deepEqual(recovered._tag === "Some" ? recovered.value.errors : undefined, []);
       if (failureMode === "ownership-lost") {
         assert.deepEqual(finalEvents, []);
         assert.deepEqual(observed, []);
@@ -2973,6 +2995,7 @@ it.effect("keeps completed runs completed when pull request refresh fails", () =
 
 function captureRootRunTermination(input: {
   readonly key: string;
+  readonly updateErrors?: RunUpdateErrors.RunUpdateErrors["Service"];
   readonly shouldFinalizeRun: () => Effect.Effect<boolean, ProjectionStore.ProjectionStoreV2Error>;
   readonly rejectTerminalWrite?: boolean;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
@@ -3033,6 +3056,11 @@ function captureRootRunTermination(input: {
         }
       });
     const layerTest = RunExecutionService.layer.pipe(
+      Layer.provide(
+        input.updateErrors === undefined
+          ? RunUpdateErrors.layer
+          : Layer.succeed(RunUpdateErrors.RunUpdateErrors, input.updateErrors),
+      ),
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(McpAppModelContext.McpAppModelContext)({
@@ -3550,6 +3578,7 @@ function runBackgroundItemScenario(
       Effect.provide(PreviewAgentActivity.layer),
     );
     const layerTest = RunExecutionService.layer.pipe(
+      Layer.provide(RunUpdateErrors.layer),
       Layer.provide(
         Layer.mergeAll(
           McpAppModelContext.layerEmpty,

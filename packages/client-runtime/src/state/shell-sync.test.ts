@@ -4,6 +4,7 @@ import {
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ShellStreamItem,
   ThreadId,
+  RunId,
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -122,6 +123,34 @@ const makePersistenceHarness = Effect.fn("test.makeShellPersistenceHarness")(fun
 });
 
 describe("environment shell synchronization", () => {
+  it.effect("applies live update errors at the current cursor and clears them without replay", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makePersistenceHarness(() => Effect.void);
+        yield* h.send(
+          { kind: "thread.updated", sequence: 5, location: "active", thread: v2ThreadShell },
+          () => true,
+        );
+        const error = {
+          threadId: v2ThreadShell.id,
+          runId: RunId.make("active"),
+          message: "Cannot save updates.",
+        };
+        const failed = yield* h.send(
+          { kind: "update-errors", errors: [error] },
+          (snapshot) => snapshot.threads[0]?.updateError !== undefined,
+        );
+        expect(failed.snapshotSequence).toBe(5);
+        expect(failed.threads[0]?.updateError?.message).toBe(error.message);
+        const recovered = yield* h.send(
+          { kind: "update-errors", errors: [] },
+          (snapshot) => snapshot.threads[0]?.updateError === undefined,
+        );
+        expect(recovered.snapshotSequence).toBe(5);
+      }),
+    ),
+  );
+
   it.effect("skips unchanged shell writes, persists resets and flushes changed rows", () =>
     Effect.gen(function* () {
       const saved = yield* SubscriptionRef.make<ReadonlyArray<OrchestrationV2ShellSnapshot>>([]);

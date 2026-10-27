@@ -135,6 +135,19 @@ export function applyShellStreamEvent(
     { readonly kind: "snapshot" } | { readonly kind: "synchronized" }
   >,
 ): OrchestrationV2ShellSnapshot {
+  if (event.kind === "update-errors") {
+    const errors = new Map(event.errors.map((error) => [error.threadId, error]));
+    const apply = (threads: OrchestrationV2ShellSnapshot["threads"]) =>
+      threads.map((thread) => {
+        const updateError = errors.get(thread.id);
+        return thread.updateError === updateError ? thread : { ...thread, updateError };
+      });
+    return {
+      ...snapshot,
+      threads: apply(snapshot.threads),
+      archivedThreads: apply(snapshot.archivedThreads),
+    };
+  }
   if (event.sequence <= snapshot.snapshotSequence) return snapshot;
 
   switch (event.kind) {
@@ -162,7 +175,13 @@ export function applyShellStreamEvent(
         event.location === "active"
           ? snapshot.threads.find((thread) => thread.id === event.thread.id)
           : undefined;
-      if (existing !== undefined && sameThreadShell(existing, event.thread)) {
+      const thread =
+        existing?.updateError !== undefined &&
+        event.thread.updateError === undefined &&
+        existing.updateError.runId === event.thread.activeRunId
+          ? { ...event.thread, updateError: existing.updateError }
+          : event.thread;
+      if (existing !== undefined && sameThreadShell(existing, thread)) {
         return { ...snapshot, snapshotSequence: event.sequence };
       }
       const withoutThread = (threads: OrchestrationV2ShellSnapshot["threads"]) =>
@@ -171,7 +190,7 @@ export function applyShellStreamEvent(
         ...snapshot,
         threads:
           event.location === "active"
-            ? upsertById(snapshot.threads, event.thread)
+            ? upsertById(snapshot.threads, thread)
             : withoutThread(snapshot.threads),
         // The archive has its own bounded query/subscription. Older servers may
         // still send archive-located deltas here; remove them from the normal

@@ -105,6 +105,26 @@ const itemIds = (state: GuestStreamState) =>
   state.projection?.visibleTurnItems.map((row) => row.item.id) ?? [];
 
 describe("applyGuestStreamEvent", () => {
+  it("accepts live update errors without moving the durable cursor", () => {
+    const state = { ...initialGuestStreamState, projection, sequence: 7 };
+    const error = {
+      threadId: projection.thread.id,
+      runId: RunId.make("run-update-error"),
+      message: "Cannot save updates.",
+    };
+    const failed = applyGuestStreamEvent(state, {
+      type: "thread",
+      item: { kind: "update-errors", errors: [error] },
+    });
+    expect(failed.sequence).toBe(7);
+    expect(failed.projection?.updateError).toEqual(error);
+    const recovered = applyGuestStreamEvent(failed, {
+      type: "thread",
+      item: { kind: "update-errors", errors: [] },
+    });
+    expect(recovered.projection?.updateError).toBeUndefined();
+  });
+
   it("builds the thread from the snapshot and applies each later event once", () => {
     const once = apply([{ type: "view", view }, snapshot(1), itemEvent(2, reply("a1", "Hi"))]);
     expect(itemIds(once)).toEqual(["a1"]);

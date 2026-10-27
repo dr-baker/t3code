@@ -1,3 +1,4 @@
+import * as RunUpdateErrors from "./RunUpdateErrors.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   AuthOrchestrationReadScope,
@@ -392,6 +393,7 @@ const seed = Effect.gen(function* () {
 });
 
 const TestLayer = Layer.mergeAll(
+  RunUpdateErrors.layer,
   management,
   Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
     getEnvironmentId: Effect.succeed(EnvironmentId.make("compact-transport")),

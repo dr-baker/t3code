@@ -158,6 +158,7 @@ export function sameThreadStructure(
   next: OrchestrationV2ThreadProjection,
 ): boolean {
   if (previous === next) return true;
+  if (previous.updateError !== next.updateError) return false;
   for (const key of Object.keys(next) as Array<keyof OrchestrationV2ThreadProjection>) {
     if (
       key === "thread" ||
