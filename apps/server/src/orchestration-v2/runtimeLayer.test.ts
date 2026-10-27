@@ -1,3 +1,4 @@
+import * as ModelCapacityRecoveryWorker from "./ModelCapacityRecoveryWorker.ts";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -6178,6 +6179,305 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         }
         assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 3);
       }),
+  );
+
+  it.effect.each([
+    "retry",
+    "timer",
+    "restore",
+    "live",
+    "provider-retrying",
+    "stop",
+    "resumed",
+    "archive",
+    "snooze",
+    "settle",
+    "other-error",
+    "quota",
+    "wrong-code",
+    "model-change",
+    "queued",
+    "pending-input",
+    "other-provider",
+  ] as const)("recovers Codex model capacity with bounded backoff: %s", (scenario) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const events = yield* EventSink.EventSinkV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const worker = yield* ModelCapacityRecoveryWorker.make;
+      const threadId = ThreadId.make(`capacity:${scenario}`);
+      const projectId = ProjectId.make(`capacity:project:${scenario}`);
+      yield* seedProject({
+        projectId,
+        title: "Capacity",
+        workspaceRoot: process.cwd(),
+        defaultModelSelection: modelSelection,
+        createdAt: DateTime.formatIso(yield* DateTime.now),
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`capacity:create:${scenario}`),
+        threadId,
+        projectId,
+        title: "Capacity",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`capacity:work:${scenario}`),
+        threadId,
+        messageId: MessageId.make(`capacity:work:${scenario}`),
+        text: "Work",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      if (scenario === "live") yield* worker.start();
+      const initial = yield* orchestrator.getThreadProjection(threadId);
+      const run = initial.runs.at(-1)!;
+      const now = yield* DateTime.now;
+      const failure = {
+        id: TurnItemId.make(`capacity:error:${scenario}`),
+        type: "error" as const,
+        threadId,
+        runId: run.id,
+        nodeId: run.rootNodeId,
+        providerThreadId: run.providerThreadId,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 2,
+        status: "failed" as const,
+        title: "Provider error",
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        failure: {
+          class: scenario === "quota" ? ("usage_limit" as const) : ("provider_error" as const),
+          message:
+            scenario === "other-error"
+              ? "Something else failed."
+              : "Selected model is at capacity. Please try a different model.",
+          code: scenario === "wrong-code" ? "http500" : "serverOverloaded",
+          retryable: null,
+        },
+      };
+      yield* events.write({
+        events: [
+          {
+            id: EventId.make(`capacity:failed:${scenario}`),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              ...run,
+              status: scenario === "provider-retrying" ? "running" : "failed",
+              completedAt: scenario === "provider-retrying" ? null : now,
+            },
+          },
+          {
+            id: EventId.make(`capacity:error:${scenario}`),
+            type: "turn-item.updated",
+            threadId,
+            occurredAt: now,
+            payload: failure,
+          },
+        ],
+      });
+      assert.equal(
+        (yield* projections.getRecoveryThreadIds("model-capacity")).includes(threadId),
+        scenario !== "quota" && scenario !== "wrong-code",
+      );
+      const resume = {
+        type: "message.dispatch" as const,
+        commandId: CommandId.make(`capacity:resume:${scenario}`),
+        threadId,
+        messageId: MessageId.make(`capacity:resume:${scenario}`),
+        text: "continue",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" as const },
+        createdBy: "agent" as const,
+        creationSource: "server" as const,
+        capacityContinuationOfRunId: run.id,
+      };
+      const timer =
+        scenario !== "retry" && scenario !== "restore" && scenario !== "live"
+          ? yield* Effect.forkChild(worker.recover(threadId, run.id))
+          : null;
+      if (scenario === "stop")
+        yield* orchestrator.dispatch({
+          type: "thread.stop",
+          threadId,
+          commandId: CommandId.make(`capacity:stop:${scenario}`),
+        });
+      if (scenario === "archive")
+        yield* orchestrator.dispatch({
+          type: "thread.archive",
+          threadId,
+          commandId: CommandId.make(`capacity:archive:${scenario}`),
+        });
+      if (scenario === "settle")
+        yield* orchestrator.dispatch({
+          type: "thread.settle",
+          threadId,
+          commandId: CommandId.make(`capacity:settle:${scenario}`),
+        });
+      if (scenario === "snooze")
+        yield* orchestrator.dispatch({
+          type: "thread.snooze",
+          threadId,
+          commandId: CommandId.make(`capacity:snooze:${scenario}`),
+          snoozedUntil: DateTime.formatIso(DateTime.add(now, { hours: 1 })),
+        });
+      if (scenario === "model-change")
+        yield* orchestrator.dispatch({
+          type: "thread.model-selection.set",
+          threadId,
+          commandId: CommandId.make(`capacity:model:${scenario}`),
+          modelSelection: { ...modelSelection, model: "gpt-5.5" },
+        });
+      if (scenario === "resumed" || scenario === "queued")
+        yield* orchestrator.dispatch({
+          ...resume,
+          capacityContinuationOfRunId: undefined,
+          dispatchMode: { type: "defer_start" },
+          commandId: CommandId.make(`capacity:user:${scenario}`),
+          messageId: MessageId.make(`capacity:user:${scenario}`),
+          createdBy: "user",
+          creationSource: "web",
+        });
+      if (scenario === "resumed") {
+        const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+        yield* events.write({
+          events: [
+            {
+              id: EventId.make(`capacity:running:${scenario}`),
+              type: "run.updated",
+              threadId,
+              occurredAt: now,
+              payload: { ...queued, status: "running", startedAt: now },
+            },
+          ],
+        });
+      }
+      if (scenario === "pending-input")
+        yield* events.write({
+          events: [
+            {
+              id: EventId.make(`capacity:input:${scenario}`),
+              type: "runtime-request.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: RuntimeRequestId.make(`capacity:input:${scenario}`),
+                nodeId: run.rootNodeId!,
+                providerTurnId: null,
+                nativeRequestRef: null,
+                kind: "user_input",
+                status: "pending",
+                responseCapability: { type: "message" },
+                createdAt: now,
+                resolvedAt: null,
+              },
+            },
+          ],
+        });
+      if (scenario === "other-provider")
+        yield* events.write({
+          events: [
+            {
+              id: EventId.make(`capacity:provider:${scenario}`),
+              type: "provider-thread.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                ...initial.providerThreads.find((p) => p.id === run.providerThreadId)!,
+                driver: ProviderDriverKind.make("claude"),
+              },
+            },
+          ],
+        });
+      const continuations = yield* Queue.unbounded<RunId>();
+      if (scenario === "restore" || scenario === "live") {
+        const afterSequence = yield* events.latestSequence();
+        yield* Stream.runForEach(
+          orchestrator.streamStoredEventsFrom({ afterSequence }),
+          ({ event }) =>
+            event.threadId === threadId &&
+            event.type === "run.created" &&
+            event.payload.capacityContinuationOfRunId === run.id
+              ? Queue.offer(continuations, event.payload.id)
+              : Effect.void,
+        ).pipe(Effect.forkScoped);
+        if (scenario === "restore") {
+          yield* TestClock.adjust("4 minutes");
+          yield* worker.start();
+        }
+      }
+      const before = (yield* orchestrator.getThreadProjection(threadId)).runs.length;
+      yield* TestClock.adjust(scenario === "restore" ? "359 seconds" : "599 seconds");
+      yield* orchestrator.dispatch({
+        ...resume,
+        commandId: CommandId.make(`${resume.commandId}:early`),
+      });
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, before);
+      yield* TestClock.adjust("1 second");
+      if (timer !== null) yield* Fiber.join(timer);
+      else if (scenario === "restore" || scenario === "live") yield* Queue.take(continuations);
+      else {
+        yield* orchestrator.dispatch(resume);
+        yield* orchestrator.dispatch(resume);
+      }
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      const shouldResume =
+        scenario === "retry" ||
+        scenario === "timer" ||
+        scenario === "restore" ||
+        scenario === "live";
+      assert.lengthOf(after.runs, before + (shouldResume ? 1 : 0));
+      if (shouldResume) {
+        assert.equal(after.messages.at(-1)?.text, "continue");
+        const fallback = after.runs.at(-1)!;
+        assert.equal(fallback.capacityContinuationOfRunId, run.id);
+        const failedAt = yield* DateTime.now;
+        yield* events.write({
+          events: [
+            {
+              id: EventId.make(`capacity:fallback-failed:${scenario}`),
+              type: "run.updated",
+              threadId,
+              occurredAt: failedAt,
+              payload: { ...fallback, status: "failed", completedAt: failedAt },
+            },
+            {
+              id: EventId.make(`capacity:fallback-error:${scenario}`),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: failedAt,
+              payload: {
+                ...failure,
+                id: TurnItemId.make(`capacity:fallback-error:${scenario}`),
+                runId: fallback.id,
+                nodeId: fallback.rootNodeId,
+                updatedAt: failedAt,
+              },
+            },
+          ],
+        });
+        yield* worker.recover(threadId, fallback.id);
+        assert.lengthOf(
+          (yield* orchestrator.getThreadProjection(threadId)).runs,
+          after.runs.length,
+        );
+      }
+    }),
   );
 
   it.effect.each([
