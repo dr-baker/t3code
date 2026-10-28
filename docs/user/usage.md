@@ -54,6 +54,12 @@ saved totals first, then updates them when Cursor's API responds.
 If recent work is missing or a new model shows no cost, refresh to rescan session history and
 update model pricing.
 
+Each thread also shows an API cost estimate, updated when you send a message or a turn ends.
+Choose the cost icon beside an assistant reply's timestamp to see that turn's estimate, including retries.
+Estimates cover recorded main-agent usage. A `+` means the total is partial, such as when a model
+has no known price or subagent usage is excluded. An unavailable estimate means the thread
+has no usage that can be priced. Custom prices and model mappings apply to these estimates too.
+
 ## Set custom model prices
 
 On web or desktop, open the environment dropdown on **Usage**, then choose **Model prices** to add,

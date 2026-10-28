@@ -1,3 +1,6 @@
+import { formatThreadCost } from "@t3tools/client-runtime/state/usage";
+import { serverEnvironment } from "../../state/server";
+import { useEnvironmentQuery } from "../../state/query";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
@@ -78,6 +81,15 @@ export const ChatHeader = memo(function ChatHeader({
   onNewThreadInProject,
   onOpenProjectSettings,
 }: ChatHeaderProps) {
+  const cost = useEnvironmentQuery(
+    isServerThread
+      ? serverEnvironment.threadCost({
+          environmentId: activeThreadEnvironmentId,
+          input: { threadId: activeThreadId },
+        })
+      : null,
+  );
+  const costLabel = formatThreadCost(cost.data);
   const activeProjectName = activeProject?.isScratch ? "No project" : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const interfaceFont = useClientSettings((settings) => settings.fontFamilySans);
@@ -408,6 +420,22 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {costLabel ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={<span className="shrink-0 text-xs tabular-nums text-muted-foreground" />}
+          >
+            {costLabel}
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">
+            Estimated API cost for recorded main-agent usage, including cache and speed pricing.
+            Subscription charges may differ.
+            {cost.data?.partial
+              ? " Partial total: some turns, models, or subagents are not included."
+              : ""}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>
   );

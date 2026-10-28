@@ -3,7 +3,14 @@ import type {
   UsageCostSource,
   UsageModelPriceOverride,
   UsageTokenTotals,
+  OrchestrationV2ThreadProjection,
+  ThreadCost,
+  RunId,
 } from "@t3tools/contracts";
+import {
+  getModelSelectionBooleanOptionValue,
+  getModelSelectionStringOptionValue,
+} from "@t3tools/shared/model";
 
 import type { UsageRecord, UsageSpeed } from "@t3tools/provider-core/server/usage";
 
@@ -285,4 +292,119 @@ export function cacheSavingsUsd(
   if (rate === null) return 0;
   const rates = ratesAt(rate, record.speed);
   return record.totals.cachedInputTokens * (rates.inputCostPerToken - rates.cacheReadCostPerToken);
+}
+
+export function priceThreadUsage(
+  projection: {
+    readonly runs: ReadonlyArray<
+      Pick<OrchestrationV2ThreadProjection["runs"][number], "id" | "modelSelection">
+    >;
+    readonly attempts: ReadonlyArray<
+      Pick<OrchestrationV2ThreadProjection["attempts"][number], "id" | "runId">
+    >;
+    readonly providerTurns: ReadonlyArray<
+      Pick<
+        OrchestrationV2ThreadProjection["providerTurns"][number],
+        "status" | "runAttemptId" | "turnTokenUsage"
+      >
+    >;
+  },
+  rates: RateTable,
+  overrides: RateTable,
+  aliases: ReadonlyMap<string, string>,
+): ThreadCost {
+  const runs = new Map(projection.runs.map((run) => [run.id, run]));
+  const attempts = new Map(projection.attempts.map((attempt) => [attempt.id, attempt]));
+  const costsByRun = new Map<
+    RunId,
+    { runId: RunId; costUsd: number; pricedTurns: number; unpricedTurns: number; partial: boolean }
+  >();
+  let unattributedTurns = 0;
+  for (const turn of projection.providerTurns) {
+    if (turn.status === "pending" || turn.status === "running") continue;
+    const attempt = turn.runAttemptId === null ? undefined : attempts.get(turn.runAttemptId);
+    const run = attempt === undefined ? undefined : runs.get(attempt.runId);
+    if (run === undefined) {
+      unattributedTurns += 1;
+      continue;
+    }
+    const cost = costsByRun.get(run.id) ?? {
+      runId: run.id,
+      costUsd: 0,
+      pricedTurns: 0,
+      unpricedTurns: 0,
+      partial: false,
+    };
+    costsByRun.set(run.id, cost);
+    const selection = run.modelSelection;
+    const usage = turn.turnTokenUsage;
+    if (
+      usage === undefined ||
+      usage.usageStatus === "unavailable" ||
+      usage.inputTokens === undefined ||
+      usage.outputTokens === undefined
+    ) {
+      cost.unpricedTurns += 1;
+      continue;
+    }
+    const tier =
+      getModelSelectionStringOptionValue(selection, "serviceTier") ??
+      (getModelSelectionBooleanOptionValue(selection, "fastMode") === true ? "fast" : "standard");
+    const speed =
+      tier === "ultrafast"
+        ? "ultrafast"
+        : tier === "priority" || tier === "fast"
+          ? "fast"
+          : "standard";
+    const cachedInputTokens = usage.cachedInputTokens ?? 0;
+    const cacheCreationTokens = usage.cacheCreationTokens ?? 0;
+    const priced = priceUsage(
+      rates,
+      {
+        model: aliases.get(selection.model) ?? selection.model,
+        speed,
+        reportedCostUsd: null,
+        totals: {
+          uncachedInputTokens: Math.max(
+            0,
+            usage.inputTokens - cachedInputTokens - cacheCreationTokens,
+          ),
+          cachedInputTokens,
+          cacheCreationTokens,
+          outputTokens: usage.outputTokens,
+          reasoningTokens: usage.reasoningTokens ?? 0,
+        },
+      },
+      overrides,
+    );
+    if (priced.costSource === "unpriced") {
+      cost.unpricedTurns += 1;
+    } else {
+      cost.pricedTurns += 1;
+      cost.costUsd += priced.costUsd;
+      cost.partial ||= usage.usageStatus !== "complete" || usage.hasSubagents;
+    }
+  }
+  const runCosts = [...costsByRun.values()].map((cost) => ({
+    ...cost,
+    costUsd: cost.pricedTurns === 0 ? null : cost.costUsd,
+    partial: cost.partial || cost.unpricedTurns > 0,
+  }));
+  let costUsd = 0;
+  let pricedTurns = 0;
+  let unpricedTurns = unattributedTurns;
+  let partial = unattributedTurns > 0;
+  for (const cost of runCosts) {
+    costUsd += cost.costUsd ?? 0;
+    pricedTurns += cost.pricedTurns;
+    unpricedTurns += cost.unpricedTurns;
+    partial ||= cost.partial;
+  }
+  return {
+    costUsd: pricedTurns === 0 ? null : costUsd,
+    pricedTurns,
+    unpricedTurns,
+    partial,
+    runs: runCosts,
+  };
 }

@@ -1,3 +1,4 @@
+import { environmentThreadDetails } from "./threads";
 import { createServerEnvironmentAtoms } from "@t3tools/client-runtime/state/server";
 import {
   createOutdatedServerDescriptionCommand,
@@ -12,6 +13,7 @@ import { createThreadListEnvironmentsAtom } from "./thread-list-environments";
 
 export const serverEnvironment = createServerEnvironmentAtoms(connectionAtomRuntime, {
   initialConfigValueAtom: environmentSession.initialConfigValueAtom,
+  threadCostRevisionAtom: environmentThreadDetails.costRevisionAtom,
   usageLimitSources: true,
   usageLimitsCommand: true,
 });

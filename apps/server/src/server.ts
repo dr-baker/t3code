@@ -266,6 +266,7 @@ const layerBackground = BackgroundPolicy.layer.pipe(
 );
 
 const layerUsage = UsageService.layer.pipe(
+  Layer.provide(ProjectionStoreV2.layer),
   Layer.provide(
     Layer.mergeAll(
       AntigravityUsage.layer,

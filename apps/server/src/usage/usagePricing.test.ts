@@ -1,3 +1,4 @@
+import { RunId, RunAttemptId, ProviderInstanceId, type TurnTokenUsage } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import { cursorRateModel } from "@t3tools/provider-cursor/server/accountUsage";
@@ -8,6 +9,7 @@ import {
   lookupRate,
   parseRateTable,
   priceUsage,
+  priceThreadUsage,
 } from "./usagePricing.ts";
 
 const rate = (input: number, cacheRead?: number) => ({
@@ -257,5 +259,155 @@ describe("usage pricing", () => {
     expect(lookupRate(table, "provider-a/example-model")?.inputCostPerToken).toBe(1);
     expect(lookupRate(table, "provider-b/example-model")?.inputCostPerToken).toBe(3);
     expect(lookupRate(table, "example-model")).toBeNull();
+  });
+});
+
+describe("thread cost", () => {
+  const runId = RunId.make("priced-run");
+  const attemptId = RunAttemptId.make("priced-attempt");
+  const selection = { instanceId: ProviderInstanceId.make("codex"), model: "priced-model" };
+  const usage: TurnTokenUsage = {
+    usageStatus: "complete",
+    usageScope: "main_agent",
+    hasSubagents: false,
+    inputTokens: 1000,
+    cachedInputTokens: 600,
+    cacheCreationTokens: 100,
+    outputTokens: 200,
+    reasoningTokens: 100,
+  };
+  const rates = parseRateTable({
+    "priced-model": {
+      input_cost_per_token: 0.01,
+      output_cost_per_token: 0.05,
+      cache_read_input_token_cost: 0.001,
+      cache_creation_input_token_cost: 0.02,
+      input_cost_per_token_priority: 0.02,
+      output_cost_per_token_priority: 0.1,
+    },
+  });
+  const projection = (turnTokenUsage: TurnTokenUsage | undefined = usage) => ({
+    runs: [{ id: runId, modelSelection: selection }],
+    attempts: [{ id: attemptId, runId }],
+    providerTurns: [
+      {
+        status: "completed" as const,
+        runAttemptId: attemptId,
+        ...(turnTokenUsage ? { turnTokenUsage } : {}),
+      },
+    ],
+  });
+  const price = (
+    input: Parameters<typeof priceThreadUsage>[0] = projection(),
+    overrides: ReturnType<typeof createOverrideRateTable> = new Map(),
+    aliases: ReadonlyMap<string, string> = new Map(),
+  ) => priceThreadUsage(input, rates, overrides, aliases);
+
+  it("charges cache categories once and includes reasoning within output", () => {
+    expect(price()).toMatchObject({
+      costUsd: 15.6,
+      pricedTurns: 1,
+      unpricedTurns: 0,
+      partial: false,
+    });
+  });
+
+  it("prices every attempt using its own model and speed", () => {
+    const input = projection();
+    const nextRunId = RunId.make("next-run");
+    const nextAttemptId = RunAttemptId.make("next-attempt");
+    const result = price({
+      runs: [
+        ...input.runs,
+        {
+          id: nextRunId,
+          modelSelection: { ...selection, options: [{ id: "serviceTier", value: "priority" }] },
+        },
+      ],
+      attempts: [...input.attempts, { id: nextAttemptId, runId: nextRunId }],
+      providerTurns: [
+        ...input.providerTurns,
+        { ...input.providerTurns[0]!, runAttemptId: nextAttemptId },
+      ],
+    });
+    expect(result.costUsd).toBeCloseTo(46.8);
+    expect(result.pricedTurns).toBe(2);
+  });
+
+  it("uses aliases and custom prices", () => {
+    const input = projection();
+    const custom = createOverrideRateTable({
+      custom: { inputCostPerMillionTokens: 1_000_000, outputCostPerMillionTokens: 1_000_000 },
+    });
+    expect(price(input, custom, new Map([[selection.model, "custom"]])).costUsd).toBe(1200);
+  });
+
+  it("marks missing or partial usage and excluded subagents without inventing zero costs", () => {
+    expect(
+      price({ ...projection(), providerTurns: [{ status: "completed", runAttemptId: attemptId }] }),
+    ).toMatchObject({ costUsd: null, pricedTurns: 0, unpricedTurns: 1, partial: true });
+    expect(price(projection({ ...usage, usageStatus: "partial" })).partial).toBe(true);
+    expect(price(projection({ ...usage, hasSubagents: true })).partial).toBe(true);
+    expect(price({ ...projection(), runs: [] }).costUsd).toBeNull();
+    const input = projection();
+    expect(
+      price({
+        ...input,
+        runs: [{ id: runId, modelSelection: { ...selection, model: "unknown-model" } }],
+      }).costUsd,
+    ).toBeNull();
+  });
+
+  it("ignores unfinished turns and keeps interrupted usage", () => {
+    const input = projection();
+    expect(
+      price({ ...input, providerTurns: [{ ...input.providerTurns[0]!, status: "running" }] }),
+    ).toMatchObject({ costUsd: null, pricedTurns: 0, unpricedTurns: 0, partial: false });
+    expect(
+      price({ ...input, providerTurns: [{ ...input.providerTurns[0]!, status: "interrupted" }] })
+        .costUsd,
+    ).toBe(15.6);
+  });
+  it("groups retries into their run and keeps partial costs separate between messages", () => {
+    const input = projection();
+    const retryId = RunAttemptId.make("retry");
+    const nextRunId = RunId.make("next-message");
+    const nextAttemptId = RunAttemptId.make("next-attempt");
+    const unknownRunId = RunId.make("unpriced-message");
+    const unknownAttemptId = RunAttemptId.make("unpriced-attempt");
+    const result = price({
+      runs: [
+        ...input.runs,
+        {
+          id: nextRunId,
+          modelSelection: { ...selection, options: [{ id: "serviceTier", value: "priority" }] },
+        },
+        { id: unknownRunId, modelSelection: { ...selection, model: "unknown-model" } },
+      ],
+      attempts: [
+        ...input.attempts,
+        { id: retryId, runId },
+        { id: nextAttemptId, runId: nextRunId },
+        { id: unknownAttemptId, runId: unknownRunId },
+      ],
+      providerTurns: [
+        ...input.providerTurns,
+        { ...input.providerTurns[0]!, runAttemptId: retryId, status: "interrupted" },
+        { ...input.providerTurns[0]!, runAttemptId: nextAttemptId },
+        { ...input.providerTurns[0]!, runAttemptId: unknownAttemptId },
+        { status: "completed", runAttemptId: null },
+      ],
+    });
+    expect(result.costUsd).toBeCloseTo(62.4);
+    expect(result).toMatchObject({
+      pricedTurns: 3,
+      unpricedTurns: 2,
+      partial: true,
+      runs: [
+        { runId, costUsd: 31.2, pricedTurns: 2, unpricedTurns: 0, partial: false },
+        { runId: nextRunId, costUsd: 31.2, pricedTurns: 1, unpricedTurns: 0, partial: false },
+        { runId: unknownRunId, costUsd: null, pricedTurns: 0, unpricedTurns: 1, partial: true },
+      ],
+    });
   });
 });

@@ -3,6 +3,10 @@ import type {
   ServerProvider,
   UsageSummary,
   UsageSummaryInput,
+  ThreadCost,
+  RunCost,
+  RunId,
+  UsageCostEstimate,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import type { AtomRegistry } from "effect/reactivity";
@@ -123,4 +127,31 @@ export async function refreshUsage({
       }
     }),
   );
+}
+
+const threadCostFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+export function formatThreadCost(cost: UsageCostEstimate | null): string | null {
+  if (!cost) return null;
+  if (cost.costUsd === null) return cost.unpricedTurns > 0 ? "API estimate unavailable" : null;
+  const amount =
+    cost.costUsd > 0 && cost.costUsd < 0.01 ? "<$0.01" : threadCostFormatter.format(cost.costUsd);
+  return `API ≈ ${amount}${cost.partial ? "+" : ""}`;
+}
+
+const costsByRun = new WeakMap<ThreadCost, ReadonlyMap<RunId, RunCost>>();
+
+export function getThreadRunCost(summary: ThreadCost | null, runId: RunId): RunCost | null {
+  if (!summary) return null;
+  let index = costsByRun.get(summary);
+  if (!index) {
+    index = new Map(summary.runs.map((cost) => [cost.runId, cost]));
+    costsByRun.set(summary, index);
+  }
+  return index.get(runId) ?? null;
 }

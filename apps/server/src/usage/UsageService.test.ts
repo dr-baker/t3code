@@ -13,6 +13,15 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { mergeUsage } from "@t3tools/shared/usageMerge";
 import {
   EnvironmentId,
+  EventId,
+  ThreadId,
+  RunId,
+  RunAttemptId,
+  ProjectId,
+  MessageId,
+  NodeId,
+  ProviderThreadId,
+  ProviderTurnId,
   ProviderDriverKind,
   ProviderInstanceId,
   UsageDay,
@@ -20,6 +29,7 @@ import {
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -48,6 +58,7 @@ import * as AntigravityUsage from "../provider/Drivers/AntigravityUsage.ts";
 import * as ProviderHostLive from "../provider/ProviderHostLive.ts";
 import { totalTokens, type UsageRecord } from "@t3tools/provider-core/server/usage";
 import * as UsageService from "./UsageService.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as MuseSdk from "../../../../packages/provider-muse/src/server/sdk.ts";
 import { MuseUsageHome } from "@t3tools/provider-muse/server";
 import { encodeScanCache, SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
@@ -146,6 +157,7 @@ const layerService = (input: {
   layerCursorUsageAccounts(
     CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer)),
   ).pipe(
+    Layer.provideMerge(Layer.mock(ProjectionStore.ProjectionStoreV2)({})),
     Layer.provideMerge(AntigravityUsage.layer),
     Layer.provideMerge(MuseUsageHome.layer),
     Layer.provideMerge(ProviderHostLive.layer),
@@ -2680,3 +2692,149 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 });
+
+it.live("prices persisted thread usage without scanning transcripts", () =>
+  Effect.gen(function* () {
+    const { home, settings, transcript } = yield* setup;
+    yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 999999)));
+    let fetches = 0;
+    yield* Effect.gen(function* () {
+      const context = yield* Layer.build(ProjectionStore.layerMemory);
+      const store = Context.get(context, ProjectionStore.ProjectionStoreV2);
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("priced-thread");
+      const runId = RunId.make("priced-run");
+      const attemptId = RunAttemptId.make("priced-attempt");
+      const nodeId = NodeId.make("priced-node");
+      const providerThreadId = ProviderThreadId.make("priced-provider-thread");
+      const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "test-model" };
+      yield* store.apply({
+        id: EventId.make("cost-thread-created"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId: ProjectId.make("cost-project"),
+          title: "Cost test",
+          providerInstanceId: modelSelection.instanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("cost-run-created"),
+        type: "run.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId: modelSelection.instanceId,
+          modelSelection,
+          providerThreadId,
+          userMessageId: MessageId.make("cost-user-message"),
+          rootNodeId: nodeId,
+          activeAttemptId: attemptId,
+          status: "completed",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: now,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("cost-attempt-created"),
+        type: "run-attempt.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: attemptId,
+          runId,
+          attemptOrdinal: 1,
+          rootNodeId: nodeId,
+          providerInstanceId: modelSelection.instanceId,
+          providerThreadId,
+          providerTurnId: null,
+          reason: "initial",
+          status: "completed",
+          startedAt: now,
+          completedAt: now,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("cost-turn-completed"),
+        type: "provider-turn.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: ProviderTurnId.make("cost-provider-turn"),
+          providerThreadId,
+          nodeId,
+          runAttemptId: attemptId,
+          nativeTurnRef: null,
+          ordinal: 1,
+          status: "completed",
+          startedAt: now,
+          completedAt: now,
+          turnTokenUsage: {
+            usageStatus: "complete",
+            usageScope: "main_agent",
+            hasSubagents: false,
+            inputTokens: 100,
+            cachedInputTokens: 80,
+            outputTokens: 10,
+          },
+        },
+      });
+      using open = vi.spyOn(NodeFSP, "open");
+      const service = yield* UsageService.make.pipe(Effect.provideContext(context));
+      for (let read = 0; read < 2; read++) {
+        const cost = yield* service.readThreadCost({ threadId });
+        assert.closeTo(cost.costUsd ?? NaN, 0.078, 1e-12);
+        assert.strictEqual(cost.pricedTurns, 1);
+        assert.isFalse(cost.partial);
+        assert.strictEqual(cost.runs.length, 1);
+        assert.strictEqual(cost.runs[0]?.runId, runId);
+        assert.closeTo(cost.runs[0]?.costUsd ?? NaN, 0.078, 1e-12);
+      }
+      assert.strictEqual(fetches, 1);
+      assert.isFalse(open.mock.calls.some(([path]) => path === transcript));
+    }).pipe(
+      Effect.provide(
+        layerService({
+          prefix: "thread-cost",
+          home,
+          settings,
+          onRatesFetch: () => {
+            fetches++;
+          },
+          ratesDocument: {
+            "test-model": {
+              input_cost_per_token: 0.001,
+              cache_read_input_token_cost: 0.0001,
+              output_cost_per_token: 0.005,
+            },
+          },
+        }),
+      ),
+    );
+  }),
+);

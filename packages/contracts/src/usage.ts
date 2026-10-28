@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { ForwardCompatibleArray, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleArray,
+  NonNegativeInt,
+  RunId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 /** Bump for incompatible UsageSummary changes; skipped unknown array variants need no bump. */
 export const USAGE_CONTRACT_VERSION = 6 as const;
@@ -107,6 +113,26 @@ export const UsagePricing = Schema.Struct({
   knownModels: NonNegativeInt,
 });
 export type UsagePricing = typeof UsagePricing.Type;
+
+export const ThreadCostInput = Schema.Struct({ threadId: ThreadId });
+export type ThreadCostInput = typeof ThreadCostInput.Type;
+
+export const UsageCostEstimate = Schema.Struct({
+  costUsd: Schema.NullOr(Schema.Number),
+  pricedTurns: NonNegativeInt,
+  unpricedTurns: NonNegativeInt,
+  partial: Schema.Boolean,
+});
+export type UsageCostEstimate = typeof UsageCostEstimate.Type;
+
+export const RunCost = Schema.Struct({ runId: RunId, ...UsageCostEstimate.fields });
+export type RunCost = typeof RunCost.Type;
+
+export const ThreadCost = Schema.Struct({
+  ...UsageCostEstimate.fields,
+  runs: Schema.Array(RunCost),
+});
+export type ThreadCost = typeof ThreadCost.Type;
 
 export const UsageSummaryInput = Schema.Struct({
   sinceDay: UsageDay,

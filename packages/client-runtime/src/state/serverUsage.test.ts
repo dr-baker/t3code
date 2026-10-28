@@ -1,6 +1,8 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  ThreadId,
+  RunId,
   UsageDay,
   UsageReadError,
   USAGE_CONTRACT_VERSION,
@@ -35,6 +37,7 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
+import { getThreadRunCost } from "./usage.ts";
 import { createServerEnvironmentAtoms } from "./server.ts";
 
 const TARGET = new PrimaryConnectionTarget({
@@ -85,8 +88,26 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
   const events = yield* Queue.unbounded<ServerConfigStreamEvent>();
   let settings = DEFAULT_SERVER_SETTINGS;
   let requests = 0;
+  let threadCostRequests = 0;
+  const costRevision = Atom.make("");
   const inputs: UsageSummaryInput[] = [];
   const client = {
+    [WS_METHODS.serverGetThreadCost]: () =>
+      Effect.sync(() => ({
+        costUsd: ++threadCostRequests,
+        pricedTurns: 1,
+        unpricedTurns: 0,
+        partial: false,
+        runs: [
+          {
+            runId: RunId.make("cost-run"),
+            costUsd: threadCostRequests,
+            pricedTurns: 1,
+            unpricedTurns: 0,
+            partial: false,
+          },
+        ],
+      })),
     [WS_METHODS.serverRefreshUsageRates]: () => Effect.succeed(PRICING),
     [WS_METHODS.subscribeServerConfig]: () =>
       Stream.concat(
@@ -178,6 +199,7 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
   const initialConfigValueAtom = Atom.make(CONFIG);
   const atoms = createServerEnvironmentAtoms(runtime, {
     initialConfigValueAtom: () => initialConfigValueAtom,
+    threadCostRevisionAtom: () => costRevision,
   });
   const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (registry) =>
     Effect.sync(() => registry.dispose()),
@@ -201,6 +223,8 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
     registry,
     atoms,
     requests: () => requests,
+    threadCostRequests: () => threadCostRequests,
+    costRevision,
     inputs: () => inputs,
     updateSettings,
     summary: (input = INPUT) => atoms.usageSummary({ environmentId: TARGET.environmentId, input }),
@@ -298,4 +322,45 @@ it.effect("keeps the cached usage summary when the awaited refresh fails", () =>
       unmount();
     }),
   ),
+);
+
+it.effect("refreshes thread estimates at message and turn boundaries without polling", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness();
+    const query = harness.atoms.threadCost({
+      environmentId: TARGET.environmentId,
+      input: { threadId: ThreadId.make("cost-thread") },
+    });
+    const awaitCost = (cost: number) =>
+      AtomRegistry.toStream(harness.registry, query).pipe(
+        Stream.filter(
+          (result) =>
+            AsyncResult.isSuccess(result) && !result.waiting && result.value.costUsd === cost,
+        ),
+        Stream.runHead,
+      );
+    const footerQuery = harness.atoms.threadCost({
+      environmentId: TARGET.environmentId,
+      input: { threadId: ThreadId.make("cost-thread") },
+    });
+    const footer = Atom.make((get) =>
+      getThreadRunCost(
+        Option.getOrNull(AsyncResult.value(get(footerQuery))),
+        RunId.make("cost-run"),
+      ),
+    );
+    const unmountFooter = harness.registry.mount(footer);
+    yield* Effect.addFinalizer(() => Effect.sync(unmountFooter));
+    const unmount = harness.registry.mount(query);
+    yield* Effect.addFinalizer(() => Effect.sync(unmount));
+    yield* awaitCost(1);
+    expect(harness.registry.get(footer)?.costUsd).toBe(1);
+    harness.registry.set(harness.costRevision, "message");
+    yield* awaitCost(2);
+    harness.registry.set(harness.costRevision, "message");
+    harness.registry.set(harness.costRevision, "completion");
+    yield* awaitCost(3);
+    expect(harness.registry.get(footer)?.costUsd).toBe(3);
+    expect(harness.threadCostRequests()).toBe(3);
+  }),
 );

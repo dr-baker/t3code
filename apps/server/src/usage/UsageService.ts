@@ -10,6 +10,8 @@ import {
   type UsagePricing,
   type UsageSummary,
   type UsageSummaryInput,
+  type ThreadCostInput,
+  type ThreadCost,
   UsageReadError,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -41,7 +43,12 @@ import type {
   UsageRecord,
 } from "@t3tools/provider-core/server/usage";
 import { resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
-import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
+import {
+  createOverrideRateTable,
+  parseRateTable,
+  priceThreadUsage,
+  type RateTable,
+} from "./usagePricing.ts";
 import {
   listTranscriptFiles,
   readDirectoryVolumeId,
@@ -57,6 +64,8 @@ import {
   type CachedFile,
   type ScanCache,
 } from "./usageScanCache.ts";
+
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -149,10 +158,12 @@ export class UsageService extends Context.Service<
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
     readonly refreshRates: Effect.Effect<UsagePricing>;
+    readonly readThreadCost: (input: ThreadCostInput) => Effect.Effect<ThreadCost, UsageReadError>;
   }
 >()("t3/usage/UsageService") {}
 
 export const make = Effect.gen(function* () {
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
@@ -904,7 +915,32 @@ export const make = Effect.gen(function* () {
     return yield* Deferred.await(deferred);
   });
 
-  return { readSummary, refreshRates, awaitPersisted } as const;
+  const readThreadCost = Effect.fn("UsageService.readThreadCost")(function* (
+    input: ThreadCostInput,
+  ) {
+    const records = yield* projections
+      .getThreadRecords(input.threadId, ["runs", "attempts", "providerTurns"])
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new UsageReadError({
+              reason: "scanFailed",
+              detail: "Could not read thread usage.",
+              cause,
+            }),
+        ),
+      );
+    const settings = yield* readSettings;
+    yield* ensureRates(false);
+    return priceThreadUsage(
+      records,
+      rates,
+      createOverrideRateTable(settings.usagePriceOverrides),
+      resolveModelAliases(settings.usageModelAliases),
+    );
+  });
+
+  return { readSummary, readThreadCost, refreshRates, awaitPersisted } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);

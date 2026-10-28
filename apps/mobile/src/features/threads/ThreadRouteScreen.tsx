@@ -1,3 +1,5 @@
+import { formatThreadCost } from "@t3tools/client-runtime/state/usage";
+import { serverEnvironment } from "../../state/server";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
@@ -483,7 +485,16 @@ function ThreadRouteContent(
     : null;
 
   const usesNativeHeaderGlass = NATIVE_LIQUID_GLASS_SUPPORTED;
+  const threadCost = useEnvironmentQuery(
+    selectedThreadDetailRef
+      ? serverEnvironment.threadCost({
+          environmentId: selectedThreadDetailRef.environmentId,
+          input: { threadId: selectedThreadDetailRef.threadId },
+        })
+      : null,
+  );
   const headerSubtitle = [
+    formatThreadCost(threadCost.data),
     selectedThreadProject?.title ?? null,
     selectedEnvironmentConnection?.environmentLabel ?? null,
   ]

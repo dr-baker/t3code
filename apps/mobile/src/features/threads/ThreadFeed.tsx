@@ -1,3 +1,4 @@
+import { TurnCostButton } from "./TurnCostButton";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -1798,6 +1799,16 @@ function renderFeedEntry(
                 iconColor={iconSubtleColor}
                 projectedItem={message.projectedItem}
                 sourceTitle={props.threadTitle}
+              />
+            ) : null}
+            {message.runId ? (
+              <TurnCostButton
+                threadRef={{
+                  environmentId: props.environmentId,
+                  threadId: message.projectedItem?.sourceThreadId ?? props.threadId,
+                }}
+                runId={message.runId}
+                tintColor={iconSubtleColor}
               />
             ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">

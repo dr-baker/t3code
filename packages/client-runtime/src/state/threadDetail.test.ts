@@ -1,6 +1,10 @@
 import {
   EnvironmentId,
   EventId,
+  ProviderInstanceId,
+  ProviderTurnId,
+  ProviderThreadId,
+  NodeId,
   MessageId,
   RunId,
   TurnItemId,
@@ -324,4 +328,91 @@ it("matches full structure comparisons across streamed, batched, and reordered u
     [reasoning.id, 0],
     [assistant.id, 1],
   ]);
+});
+
+describe("thread cost revision", () => {
+  it("refreshes for user messages and billed turns, without refreshing for streamed text", () => {
+    const state = Atom.make(
+      AsyncResult.success({
+        ...EMPTY_ENVIRONMENT_THREAD_STATE,
+        data: Option.some(withItem(assistant)),
+      }),
+    );
+    const details = createEnvironmentThreadDetailAtoms(() => state);
+    const ref = { environmentId: EnvironmentId.make("test"), threadId: v2ThreadId };
+    const revision = details.costRevisionAtom(ref);
+    const registry = AtomRegistry.make();
+    try {
+      registry.mount(revision);
+      const first = registry.get(revision);
+      registry.set(
+        state,
+        AsyncResult.success({
+          ...EMPTY_ENVIRONMENT_THREAD_STATE,
+          data: Option.some(withItem({ ...assistant, text: "More tokens", updatedAt: later })),
+        }),
+      );
+      expect(registry.get(revision)).toBe(first);
+      const withRun = {
+        ...withItem(assistant),
+        runs: [
+          {
+            id: RunId.make("next"),
+            threadId: v2ThreadId,
+            ordinal: 1,
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+            providerThreadId: null,
+            userMessageId: MessageId.make("user-message"),
+            rootNodeId: null,
+            activeAttemptId: null,
+            status: "queued" as const,
+            requestedAt: v2Now,
+            startedAt: null,
+            completedAt: null,
+            checkpointId: null,
+            contextHandoffId: null,
+          },
+        ],
+      };
+      registry.set(
+        state,
+        AsyncResult.success({ ...EMPTY_ENVIRONMENT_THREAD_STATE, data: Option.some(withRun) }),
+      );
+      const afterMessage = registry.get(revision);
+      expect(afterMessage).not.toBe(first);
+      registry.set(
+        state,
+        AsyncResult.success({
+          ...EMPTY_ENVIRONMENT_THREAD_STATE,
+          data: Option.some({
+            ...withRun,
+            providerTurns: [
+              {
+                id: ProviderTurnId.make("turn"),
+                providerThreadId: ProviderThreadId.make("provider-thread"),
+                nodeId: NodeId.make("node"),
+                runAttemptId: null,
+                nativeTurnRef: null,
+                ordinal: 1,
+                status: "completed",
+                startedAt: v2Now,
+                completedAt: later,
+                turnTokenUsage: {
+                  usageStatus: "complete",
+                  usageScope: "main_agent",
+                  hasSubagents: false,
+                  inputTokens: 10,
+                  outputTokens: 5,
+                },
+              },
+            ],
+          }),
+        }),
+      );
+      expect(registry.get(revision)).not.toBe(afterMessage);
+    } finally {
+      registry.dispose();
+    }
+  });
 });

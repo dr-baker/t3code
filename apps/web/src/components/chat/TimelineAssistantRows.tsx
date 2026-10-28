@@ -12,6 +12,7 @@ import { McpAppFrame } from "./McpAppFrame";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
 import { useProject, useThreadShell } from "../../state/entities";
+import { TurnCostButton } from "./TurnCostButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantCitationSource } from "./AssistantCitationSource";
 import { resolveAssistantMessageCopyState } from "./MessagesTimeline.logic";
@@ -180,6 +181,15 @@ function AssistantMessageMeta({
       />
       {projectedItem?.item.type === "assistant_message" ? (
         <AssistantForkButton projectedItem={projectedItem} />
+      ) : null}
+      {!message.streaming && message.runId && ctx.threadRef ? (
+        <TurnCostButton
+          threadRef={{
+            environmentId: ctx.activeThreadEnvironmentId,
+            threadId: projectedItem?.sourceThreadId ?? ctx.threadRef.threadId,
+          }}
+          runId={message.runId}
+        />
       ) : null}
       {!message.streaming && (
         <Tooltip>
