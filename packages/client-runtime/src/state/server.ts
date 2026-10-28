@@ -9,6 +9,7 @@ import {
 import {
   type DesktopUpdateChannel,
   type EnvironmentId,
+  type ScopedThreadRef,
   type ProviderInstanceId,
   type ServerConfig,
   type ServerConfigStreamEvent,
@@ -954,6 +955,7 @@ export function createServerEnvironmentAtoms<R, E>(
     readonly providerStatusDeltas?: boolean;
     /** Machine refresh replies carry no providers; the config stream already delivers them. */
     readonly omitRefreshedProviders?: boolean;
+    readonly threadCostRevisionAtom?: (ref: ScopedThreadRef) => Atom.Atom<string>;
   },
 ) {
   const configScheduler = createAtomCommandScheduler();
@@ -1601,6 +1603,21 @@ export function createServerEnvironmentAtoms<R, E>(
     scheduledTasksLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:scheduled-tasks:live",
       tag: WS_METHODS.scheduledTasksSubscribe,
+    }),
+    threadCost: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:thread-cost",
+      tag: WS_METHODS.serverGetThreadCost,
+      refreshTrigger: ({ environmentId, input }) =>
+        Atom.make((get) => {
+          const revision = options.threadCostRevisionAtom?.({
+            environmentId,
+            threadId: input.threadId,
+          });
+          return JSON.stringify([
+            get(usageScanSettingsAtom(environmentId)),
+            revision ? get(revision) : "",
+          ]);
+        }),
     }),
     // A cold transcript scan is measured in seconds, so keep the result around
     // long enough that switching windows or re-rendering does not rescan. With

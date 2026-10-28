@@ -27,6 +27,7 @@ import {
   useProject,
   useQuietThreadShell,
 } from "../../state/entities";
+import { TurnCostButton } from "./TurnCostButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantCitationSource } from "./AssistantCitationSource";
 import { resolveAssistantMessageCopyState } from "./MessagesTimeline.logic";
@@ -260,6 +261,15 @@ function AssistantMessageMeta({
       ) : null}
       {!message.streaming && projectedItem ? (
         <AssistantReplyButton message={message} itemId={projectedItem.sourceItemId} />
+      ) : null}
+      {!message.streaming && message.runId && ctx.threadRef ? (
+        <TurnCostButton
+          threadRef={{
+            environmentId: ctx.activeThreadEnvironmentId,
+            threadId: projectedItem?.sourceThreadId ?? ctx.threadRef.threadId,
+          }}
+          runId={message.runId}
+        />
       ) : null}
       {!message.streaming && (
         <Tooltip>

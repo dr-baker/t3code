@@ -1,5 +1,9 @@
 import {
   EnvironmentId,
+  RunId,
+  type ThreadCost,
+  ProviderDriverKind,
+  ProviderInstanceId,
   UsageDay,
   USAGE_CONTRACT_VERSION,
   type UsageModelFilter,
@@ -11,7 +15,7 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { EnvironmentPresentation } from "../connection/presentation.ts";
-import { refreshUsage, refreshUsageLimits } from "./usage.ts";
+import { refreshUsage, refreshUsageLimits, formatThreadCost, getThreadRunCost } from "./usage.ts";
 
 const input = {
   sinceDay: UsageDay.make("2026-09-05"),
@@ -211,4 +215,54 @@ describe("limits refresh cooldown", () => {
     expect(await manual).toBe("old limits");
     expect(newCheck).not.toHaveBeenCalled();
   });
+});
+
+it("formats API estimates and distinguishes partial and unpriced totals", () => {
+  expect(formatThreadCost(null)).toBeNull();
+  expect(formatThreadCost({ costUsd: null, pricedTurns: 0, unpricedTurns: 1, partial: true })).toBe(
+    "API estimate unavailable",
+  );
+  expect(formatThreadCost({ costUsd: 0, pricedTurns: 1, unpricedTurns: 0, partial: false })).toBe(
+    "API ≈ $0.00",
+  );
+  expect(
+    formatThreadCost({ costUsd: 0.001, pricedTurns: 1, unpricedTurns: 0, partial: false }),
+  ).toBe("API ≈ <$0.01");
+  expect(
+    formatThreadCost({ costUsd: 12.34, pricedTurns: 1, unpricedTurns: 1, partial: true }),
+  ).toBe("API ≈ $12.34+");
+});
+
+it("selects each message's cost and reflects refreshed estimates", () => {
+  const first = {
+    runId: RunId.make("first"),
+    costUsd: 1.25,
+    pricedTurns: 1,
+    unpricedTurns: 0,
+    partial: false,
+  };
+  const second = {
+    runId: RunId.make("second"),
+    costUsd: null,
+    pricedTurns: 0,
+    unpricedTurns: 1,
+    partial: true,
+  };
+  const summary: ThreadCost = {
+    costUsd: 1.25,
+    pricedTurns: 1,
+    unpricedTurns: 1,
+    partial: true,
+    runs: [first, second],
+  };
+  expect(getThreadRunCost(summary, first.runId)).toBe(first);
+  expect(formatThreadCost(getThreadRunCost(summary, second.runId))).toBe(
+    "API estimate unavailable",
+  );
+  expect(getThreadRunCost(summary, RunId.make("missing"))).toBeNull();
+  expect(getThreadRunCost(null, first.runId)).toBeNull();
+  expect(
+    getThreadRunCost({ ...summary, runs: [{ ...first, costUsd: 2.5 }, second] }, first.runId)
+      ?.costUsd,
+  ).toBe(2.5);
 });

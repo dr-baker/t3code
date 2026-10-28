@@ -1,3 +1,5 @@
+import { formatThreadCost } from "@t3tools/client-runtime/state/usage";
+import { serverEnvironment } from "../../state/server";
 import * as Dialog from "../../components/ui/Dialog";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { useRememberThreadProject } from "./useRememberThreadProject";
@@ -546,7 +548,16 @@ function ThreadRouteContent(
       : scopeThreadRef(delegatedFrom.environmentId, delegatedFrom.threadId);
   // The title it had at delegation, until this client sees the parent itself.
   const delegatedFromThread = useThreadShell(delegatedFromRef);
+  const threadCost = useEnvironmentQuery(
+    selectedThreadDetailRef
+      ? serverEnvironment.threadCost({
+          environmentId: selectedThreadDetailRef.environmentId,
+          input: { threadId: selectedThreadDetailRef.threadId },
+        })
+      : null,
+  );
   const headerSubtitle = [
+    formatThreadCost(threadCost.data),
     selectedThreadProject?.title ?? null,
     selectedEnvironmentConnection?.environmentLabel ?? null,
     // A linked environment's delegated task names its parent; other linked work its origin.

@@ -8,6 +8,7 @@ import { Sheet } from "../../components/ui/Sheet";
 import { ListActionRow } from "../../components/ui/ListActionRow";
 import { ListSection } from "../../components/ui/ListSection";
 import { collectMobileAssistantTextSelectors } from "../../lib/assistantCitationSelection";
+import { TurnCostButton } from "./TurnCostButton";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { ASSISTANT_CITATION_MAX_TEXT_LENGTH, type AssistantCitation } from "@t3tools/contracts";
@@ -2725,6 +2726,16 @@ function renderFeedEntry(
                 iconSize={props.replyActionSize.icon}
                 projectedItem={message.projectedItem}
                 sourceTitle={props.threadTitle}
+              />
+            ) : null}
+            {message.runId ? (
+              <TurnCostButton
+                threadRef={{
+                  environmentId: props.environmentId,
+                  threadId: message.projectedItem?.sourceThreadId ?? props.threadId,
+                }}
+                runId={message.runId}
+                tintColor={iconSubtleColor}
               />
             ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">

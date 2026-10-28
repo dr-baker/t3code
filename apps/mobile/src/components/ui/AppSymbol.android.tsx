@@ -1,3 +1,4 @@
+import IconCoin from "@tabler/icons-react-native/IconCoin";
 import type { Icon } from "@tabler/icons-react-native/types";
 /* Package-root imports eagerly register the entire Tabler icon set in Metro. */
 import IconAdjustmentsHorizontal from "@tabler/icons-react-native/IconAdjustmentsHorizontal";
@@ -147,6 +148,7 @@ import { withUniwind } from "uniwind";
 
 const ANDROID_ICON_BY_SF_SYMBOL = {
   plusminus: IconPlusMinus,
+  "dollarsign.circle": IconCoin,
   "git.pull-request.closed": IconGitPullRequestClosed,
   "git.pull-request.draft": IconGitPullRequestDraft,
   "git.commit": IconGitCommit,

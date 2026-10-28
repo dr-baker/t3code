@@ -624,7 +624,21 @@ export function createEnvironmentThreadDetailAtoms<E>(
     ).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-workspace-mutation-id:${key}`)),
   );
 
+  const costRevisionAtomFamily = Atom.family((key: string) =>
+    Atom.make((get) => {
+      const projection = get(quietThreadAtomFamily(key))?.projection;
+      if (!projection) return "";
+      return JSON.stringify([
+        projection.runs.length,
+        projection.providerTurns
+          .filter((turn) => turn.status !== "pending" && turn.status !== "running")
+          .map((turn) => [turn.id, turn.status, turn.turnTokenUsage]),
+      ]);
+    }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-cost-revision:${key}`)),
+  );
+
   return {
+    costRevisionAtom: (ref: ScopedThreadRef) => costRevisionAtomFamily(threadKey(ref)),
     worktreePathAtom: (ref: ScopedThreadRef) => worktreePathAtomFamily(threadKey(ref)),
     workspaceMutationIdAtom: (ref: ScopedThreadRef) =>
       workspaceMutationIdAtomFamily(threadKey(ref)),

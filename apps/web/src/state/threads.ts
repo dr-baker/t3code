@@ -3,9 +3,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { enabledEnvironmentIds } from "@t3tools/client-runtime/state/connections";
 import { arrayElementsEqual } from "@t3tools/client-runtime/state/entities";
 import {
-  createEnvironmentThreadDetailAtoms,
   createEnvironmentThreadShellAtoms,
-  createEnvironmentThreadStateAtoms,
   EMPTY_ENVIRONMENT_THREAD_STATE,
   type EnvironmentThreadState,
   createOlderSettledThreadAtoms,
@@ -20,6 +18,9 @@ import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { serverEnvironment } from "./server";
 import { environmentShell } from "./shell";
+import { environmentThreadDetails, environmentThreads } from "./threadDetails";
+
+export { environmentThreadDetails } from "./threadDetails";
 
 export const threadFamilies = createThreadFamilyAtoms(
   connectionAtomRuntime,
@@ -32,10 +33,6 @@ export const olderSettledThreads = createOlderSettledThreadAtoms(
 export const threadEnvironment = createThreadEnvironmentAtoms(
   connectionAtomRuntime,
   threadFamilies.snapshotAtom,
-);
-const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime);
-export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
-  environmentThreads.stateAtom,
 );
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,

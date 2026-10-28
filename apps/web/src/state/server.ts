@@ -1,3 +1,4 @@
+import { environmentThreadDetails } from "./threadDetails";
 import {
   DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
@@ -32,6 +33,7 @@ import { reuseProvidersIgnoringCheckedAt } from "./serverProviders.logic";
 // Subscribe to every environment's themes; primary can change without reconnecting or updating the subscription.
 export const serverEnvironment = createServerEnvironmentAtoms(connectionAtomRuntime, {
   initialConfigValueAtom: environmentSession.initialConfigValueAtom,
+  threadCostRevisionAtom: environmentThreadDetails.costRevisionAtom,
   environmentThemes: true,
   usageLimitSources: true,
   usageLimitsCommand: true,
