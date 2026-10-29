@@ -33,6 +33,38 @@ const latestRun = {
 };
 
 describe("pinned activity", () => {
+  it.each(["done", "input", "approval", "failed", "plan", "woke"])(
+    "keeps a pin with %s attention in the drawer when pop-outs are disabled",
+    (status) => {
+      const thread = makeThreadFixture({
+        pinnedAt: visited,
+        runtime: status === "failed" ? { ...runtime, status: "failed" } : null,
+        latestRun: status === "done" ? latestRun : null,
+        hasPendingUserInput: status === "input",
+        hasPendingApprovals: status === "approval",
+        hasActionableProposedPlan: status === "plan",
+        interactionMode: status === "plan" ? "plan" : "default",
+      });
+      const pinnedNeedsAttention = pinnedThreadNeedsAttention(
+        thread,
+        visited,
+        status === "woke" ? completed : null,
+      );
+      expect(pinnedNeedsAttention).toBe(true);
+      const input = { pinned: true, snoozed: false, settled: false, pinnedNeedsAttention };
+      expect(resolveSidebarThreadSection({ ...input, pinnedPopOutWhenReady: true })).toBe("active");
+      expect(resolveSidebarThreadSection({ ...input, pinnedPopOutWhenReady: false })).toBe(
+        "pinned",
+      );
+      expect(
+        resolveSidebarThreadSection({ ...input, pinnedPopOutWhenReady: false, snoozed: true }),
+      ).toBe("snoozed");
+      expect(
+        resolveSidebarThreadSection({ ...input, pinnedPopOutWhenReady: false, settled: true }),
+      ).toBe("settled");
+    },
+  );
+
   it("surfaces attention states and returns to the same pin order when handled or running", () => {
     const pin = makeThreadFixture({
       id: ThreadId.make("middle"),

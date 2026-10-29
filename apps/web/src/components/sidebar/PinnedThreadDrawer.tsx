@@ -167,7 +167,7 @@ function PinnedThreadIconButton({
           <button
             type="button"
             {...buttonProps}
-            aria-label={thread.ghost ? `${thread.title}, active above` : thread.title}
+            aria-label={thread.ghost ? `${thread.title}, in Active` : thread.title}
             aria-current={thread.active && !thread.ghost ? "page" : undefined}
             onClick={(event) => onClick(event, thread.key)}
             onContextMenu={(event) => onContextMenu(event, thread.key)}

@@ -558,6 +558,12 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarCompactCards: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sidebarSingleLineThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarWorkingShelfEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  sidebarPinnedPlacement: Schema.Literals(["top", "bottom"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("bottom")),
+  ),
+  sidebarPinnedPopOutWhenReady: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
   ),
@@ -2126,6 +2132,8 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarCompactCards: Schema.optionalKey(Schema.Boolean),
   sidebarSingleLineThreads: Schema.optionalKey(Schema.Boolean),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
+  sidebarPinnedPlacement: Schema.optionalKey(Schema.Literals(["top", "bottom"])),
+  sidebarPinnedPopOutWhenReady: Schema.optionalKey(Schema.Boolean),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),

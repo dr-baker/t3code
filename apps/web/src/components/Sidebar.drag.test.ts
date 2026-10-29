@@ -10,6 +10,7 @@ import {
   resolveSidebarDropTarget,
   sidebarListItemId,
   sidebarMarkerId,
+  sidebarInboxItems,
   type SidebarListItem,
   type SidebarListMarker,
   type SidebarSection,
@@ -71,6 +72,48 @@ function preview(
 }
 
 describe("sidebar collision detection", () => {
+  it.each(["top", "bottom"] as const)(
+    "supports pin, unpin and reorder with the drawer at the %s",
+    (pinnedPlacement) => {
+      const items = sidebarInboxItems({
+        pinnedKeys: ["pin-a", "pin-b"],
+        activeKeys: ["active-a", "active-b"],
+        pinnedPlacement,
+      });
+      const order = items.filter((item) => item.kind === "thread").map((item) => item.key);
+      expect(order).toEqual(
+        pinnedPlacement === "top"
+          ? ["pin-a", "pin-b", "active-a", "active-b"]
+          : ["active-a", "active-b", "pin-a", "pin-b"],
+      );
+      expect(
+        resolveSidebarDropTarget(items, "active-a", sidebarMarkerId("pinned-header")),
+      ).toMatchObject({
+        section: "pinned",
+      });
+      expect(
+        resolveSidebarDropTarget(items, "pin-a", sidebarMarkerId("pinned-divider")),
+      ).toMatchObject({
+        section: "active",
+      });
+      expect(resolveSidebarDropTarget(items, "pin-a", "pin-b")).toMatchObject({
+        section: "pinned",
+        pinnedOrder: ["pin-b", "pin-a"],
+      });
+      const collapsed = sidebarInboxItems({
+        pinnedKeys: [],
+        activeKeys: ["active-a"],
+        pinnedPlacement,
+      });
+      expect(
+        resolveSidebarDropTarget(collapsed, "active-a", sidebarMarkerId("pinned-header")),
+      ).toMatchObject({
+        section: "pinned",
+        pinnedOrder: ["active-a"],
+      });
+    },
+  );
+
   function collisionArgs(blockedAboveSource = false) {
     const rows = [thread("source", "active"), thread("blocked", "active")];
     const items = [
