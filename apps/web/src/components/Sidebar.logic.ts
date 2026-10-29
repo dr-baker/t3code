@@ -14,7 +14,11 @@ import {
 } from "@t3tools/client-runtime/state/thread-search";
 import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@t3tools/shared/paletteSearch";
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
-import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import type {
+  ClientSettings,
+  SidebarProjectSortOrder,
+  SidebarThreadSortOrder,
+} from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
 import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
 import {
@@ -171,10 +175,12 @@ export function resolveSidebarThreadSection(input: {
   readonly settled: boolean;
   readonly pinned: boolean;
   readonly pinnedNeedsAttention?: boolean;
+  readonly pinnedPopOutWhenReady?: boolean;
 }): SidebarSection {
   if (input.snoozed) return "snoozed";
   if (input.settled) return "settled";
-  if (input.pinned && !input.pinnedNeedsAttention) return "pinned";
+  if (input.pinned && (!input.pinnedNeedsAttention || input.pinnedPopOutWhenReady === false))
+    return "pinned";
   return "active";
 }
 
@@ -196,6 +202,23 @@ export function sidebarMarkerId(marker: SidebarListMarker): string {
 export type SidebarListItem =
   | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
   | { readonly kind: "marker"; readonly marker: SidebarListMarker };
+
+export function sidebarInboxItems(input: {
+  readonly pinnedKeys: readonly string[];
+  readonly activeKeys: readonly string[];
+  readonly pinnedPlacement: ClientSettings["sidebarPinnedPlacement"];
+}): SidebarListItem[] {
+  const pinned: SidebarListItem[] = [
+    { kind: "marker", marker: "pinned-header" },
+    ...input.pinnedKeys.map((key) => ({ kind: "thread", key, section: "pinned" }) as const),
+  ];
+  const active: SidebarListItem[] = [
+    { kind: "marker", marker: "pinned-divider" },
+    { kind: "marker", marker: "active-placeholder" },
+    ...input.activeKeys.map((key) => ({ kind: "thread", key, section: "active" }) as const),
+  ];
+  return input.pinnedPlacement === "top" ? [...pinned, ...active] : [...active, ...pinned];
+}
 
 export function sidebarListItemId(item: SidebarListItem): string {
   return item.kind === "thread" ? item.key : sidebarMarkerId(item.marker);

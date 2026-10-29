@@ -45,7 +45,9 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 
 ## Pin and reorder threads
 
-Pin a thread from its menu to keep it above your active work.
+Pin a thread from its menu to keep it in the pinned section. On web and desktop,
+choose **Settings → General → Sidebar → Pinned threads position** to place pins
+at the top or bottom. The default is bottom.
 
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous
@@ -63,10 +65,11 @@ On web and desktop, pinning or unpinning a thread keeps the sidebar at your curr
 scroll position instead of following the thread to its new place in the list.
 
 On web and desktop, Pinned is a thread's resting place while it is inactive or working.
-Questions, approvals, failures, limits, unread answers, and snooze wakes bring it into Active
+By default, questions, approvals, failures, limits, unread answers, and snooze wakes bring it into Active
 without removing its pin. Once handled, it returns to its saved pin position. Automatic
 settlement leaves pinned threads alone. Settling a thread removes its pin; snoozing moves it
-to Snoozed until it wakes.
+to Snoozed until it wakes. Turn off **Settings → General → Sidebar → Pop out ready pins**
+to keep pins in the drawer when they need attention; their status badges still show it.
 
 On web and desktop, drag a thread between sections to change its state. Drag a thread into
 the pinned section to pin it at the spot you drop it; drag a resting pin into the active
@@ -81,7 +84,7 @@ the dragged thread shows the action the drop performs, with its icon: **Pin**, *
 **Settle**, **Un-settle**, or **Wake**. Its status and hover actions hide during the drag. A pinned
 thread dragged out of its resting section loses its pin; a thread surfaced for attention keeps
 its pin when reordered within Active. Reordering within the same section shows no badge.
-When there are no resting pins, drag to the Pinned target above the bottom sections to pin a
+When there are no resting pins, drag to the Pinned target at your chosen position to pin a
 thread. Section labels stay readable for the whole drag, and the section the
 thread is over takes the accent color. Section labels also
 identify empty sections and a collapsed settled shelf.

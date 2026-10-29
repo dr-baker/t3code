@@ -422,6 +422,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["sidebar threads compact rows project icon title hover actions time"],
   },
   {
+    id: "pinned-thread-placement",
+    title: "Pinned threads position",
+    to: "/settings/general",
+    searchTerms: ["sidebar pins drawer top bottom position placement"],
+  },
+  {
+    id: "pinned-thread-pop-out",
+    title: "Pop out ready pins",
+    to: "/settings/general",
+    searchTerms: ["sidebar pinned threads ready attention active unread completed pop out"],
+  },
+  {
     id: "working-shelf",
     title: "Working section",
     to: "/settings/general",

@@ -397,3 +397,34 @@ describe("ClientSettings single-line sidebar", () => {
     expect(() => decodeClientSettingsPatch({ sidebarSingleLineThreads: "yes" })).toThrow();
   });
 });
+
+describe("ClientSettings pinned drawer", () => {
+  it("preserves bottom placement and automatic pop-outs as defaults", () => {
+    const settings = decodeClientSettings({});
+    expect(settings.sidebarPinnedPlacement).toBe("bottom");
+    expect(settings.sidebarPinnedPopOutWhenReady).toBe(true);
+    expect(decodeClientSettingsPatch({})).not.toHaveProperty("sidebarPinnedPlacement");
+    expect(decodeClientSettingsPatch({})).not.toHaveProperty("sidebarPinnedPopOutWhenReady");
+  });
+
+  it.each(["top", "bottom"])(
+    "persists %s placement with pop-outs enabled or disabled",
+    (placement) => {
+      for (const enabled of [false, true]) {
+        const patch = decodeClientSettingsPatch({
+          sidebarPinnedPlacement: placement,
+          sidebarPinnedPopOutWhenReady: enabled,
+        });
+        const settings = decodeClientSettings(JSON.parse(JSON.stringify(patch)));
+        const encoded = encodeClientSettings(settings);
+        expect(encoded.sidebarPinnedPlacement).toBe(placement);
+        expect(encoded.sidebarPinnedPopOutWhenReady).toBe(enabled);
+      }
+    },
+  );
+
+  it("rejects unsupported placement and non-boolean pop-out values", () => {
+    expect(() => decodeClientSettingsPatch({ sidebarPinnedPlacement: "middle" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ sidebarPinnedPopOutWhenReady: "yes" })).toThrow();
+  });
+});

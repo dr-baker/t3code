@@ -445,6 +445,13 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? ["Working section"]
       : []),
+    ...(settings.sidebarPinnedPlacement !== DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPlacement
+      ? ["Pinned threads position"]
+      : []),
+    ...(settings.sidebarPinnedPopOutWhenReady !==
+    DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPopOutWhenReady
+      ? ["Pop out ready pins"]
+      : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? ["Auto-settle inactive threads"]
       : []),
@@ -615,6 +622,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarCompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarCompactCards,
       sidebarSingleLineThreads: DEFAULT_UNIFIED_SETTINGS.sidebarSingleLineThreads,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+      sidebarPinnedPlacement: DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPlacement,
+      sidebarPinnedPopOutWhenReady: DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPopOutWhenReady,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -905,6 +914,79 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarSingleLineThreads: Boolean(checked) })
               }
               aria-label="Single-line sidebar threads"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("pinned-thread-placement")}
+          description="Place the pinned threads drawer above or below your active threads."
+          resetAction={
+            settings.sidebarPinnedPlacement !== DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPlacement ? (
+              <SettingResetButton
+                label="pinned threads position"
+                onClick={() =>
+                  updateSettings({
+                    sidebarPinnedPlacement: DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPlacement,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.sidebarPinnedPlacement}
+              onValueChange={(value) => {
+                if (value === "top" || value === "bottom") {
+                  updateSettings({ sidebarPinnedPlacement: value });
+                }
+              }}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-full sm:w-44"
+                aria-label="Pinned threads position"
+              >
+                <SelectValue>
+                  {settings.sidebarPinnedPlacement === "top" ? "Top" : "Bottom"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="top">
+                  Top
+                </SelectItem>
+                <SelectItem hideIndicator value="bottom">
+                  Bottom
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("pinned-thread-pop-out")}
+          description="Move pins into Active when they finish or need your attention. Turn off to keep them in the drawer with their status badges."
+          resetAction={
+            settings.sidebarPinnedPopOutWhenReady !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPopOutWhenReady ? (
+              <SettingResetButton
+                label="pop out ready pins"
+                onClick={() =>
+                  updateSettings({
+                    sidebarPinnedPopOutWhenReady:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPopOutWhenReady,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarPinnedPopOutWhenReady}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarPinnedPopOutWhenReady: Boolean(checked) })
+              }
+              aria-label="Pop out ready pins"
             />
           }
         />

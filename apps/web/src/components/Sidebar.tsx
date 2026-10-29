@@ -183,6 +183,7 @@ import {
   shouldCreateNewThreadInCurrentProject,
   shouldNavigateAfterThreadPark,
   sidebarListItemId,
+  sidebarInboxItems,
   sidebarThreadKeyAtY,
   sortInboxThreadsByReturn,
   sortPinnedThreadsForSidebar,
@@ -319,6 +320,7 @@ interface SidebarThreadPartitionInput {
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
+  readonly pinnedPopOutWhenReady: boolean;
   readonly pinnedVisits: Readonly<Record<string, string | undefined>>;
   // Snooze wakes, the queued-turn grace and the Working shelf's exit grace depend
   // on the clock, so the minute tick, the precise snooze-wake tick and the inbox
@@ -401,6 +403,8 @@ function useSidebarThreads(input: {
     ),
   );
   const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
+  const pinnedPlacement = useClientSettings((s) => s.sidebarPinnedPlacement);
+  const pinnedPopOutWhenReady = useClientSettings((s) => s.sidebarPinnedPopOutWhenReady);
   const inboxReturnsVersion = useSyncExternalStore(
     inboxReturns.subscribe,
     inboxReturns.getSnapshot,
@@ -439,6 +443,7 @@ function useSidebarThreads(input: {
     serverConfigs,
     optimisticDrop,
     workingShelfEnabled,
+    pinnedPopOutWhenReady,
     pinnedVisits,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
@@ -482,8 +487,9 @@ function useSidebarThreads(input: {
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
   const orderedThreads = [
-    ...activeThreads,
-    ...pinnedThreads,
+    ...(pinnedPlacement === "top"
+      ? [...pinnedThreads, ...activeThreads]
+      : [...activeThreads, ...pinnedThreads]),
     ...visibleWorkingThreads,
     ...visibleSnoozedThreads,
     ...renderedSettledThreads,
@@ -501,6 +507,7 @@ function useSidebarThreads(input: {
   return {
     ...partition,
     pinnedDrawerThreads,
+    pinnedPlacement,
     threads,
     workingShelfEnabled,
     searchableThreads: [
@@ -574,7 +581,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
         resolveThreadLastVisitedAt(thread.lastVisitedAt, input.pinnedVisits[threadKey]),
         threadWokeAt(thread, { now: preciseNow }),
       );
-    if (needsAttention) attentionPinnedKeys.add(threadKey);
+    if (needsAttention && input.pinnedPopOutWhenReady) attentionPinnedKeys.add(threadKey);
     if (capabilities?.threadActiveReorder === true) activeReorderable.add(threadKey);
     if (capabilities?.threadPinning === true && capabilities.threadPinReorder === true) {
       draggable.add(threadKey);
@@ -605,6 +612,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
         settled: supportsSettlement && thread.settledOverride === "settled",
         pinned: thread.pinnedAt != null,
         pinnedNeedsAttention: needsAttention,
+        pinnedPopOutWhenReady: input.pinnedPopOutWhenReady,
       });
       (section === "snoozed"
         ? snoozed
@@ -1165,6 +1173,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     workingShelfEnabled,
     pinnedThreads,
     pinnedDrawerThreads,
+    pinnedPlacement,
     draggableThreadKeys,
     attentionPinnedKeys,
     activeReorderableThreadKeys,
@@ -1816,12 +1825,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     ) {
       return [];
     }
-    const items: SidebarListItem[] = [{ kind: "marker", marker: "pinned-divider" }];
-    items.push({ kind: "marker", marker: "active-placeholder" });
-    items.push(...rowsOf(activeThreads, "active"));
-    items.push({ kind: "marker", marker: "pinned-header" });
-    const pinnedRows = pinnedExpanded ? rowsOf(pinnedThreads, "pinned") : [];
-    items.push(...pinnedRows);
+    const items = sidebarInboxItems({
+      activeKeys: activeThreads.map(threadShellKey),
+      pinnedKeys: pinnedExpanded ? pinnedThreads.map(threadShellKey) : [],
+      pinnedPlacement,
+    });
     if (workingThreads.length > 0) {
       items.push({ kind: "marker", marker: "working-header" });
       items.push(...rowsOf(visibleWorkingThreads, "working"));
@@ -3203,7 +3211,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   key="pinned-header"
                                   marker="pinned-header"
                                   data-testid="sidebar-pinned-header"
-                                  className="mx-0.5 mt-auto"
+                                  className={cn(
+                                    "mx-0.5",
+                                    pinnedPlacement === "bottom" && "mt-auto",
+                                  )}
                                 >
                                   <PinnedThreadDrawer
                                     threads={pinnedDrawerThreads.map((thread) => {
@@ -3327,7 +3338,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               <SidebarSectionHeader
                                 key="working-shelf-header"
                                 marker="working-header"
-                                className={cn(pinnedDrawerThreads.length === 0 && "mt-auto")}
+                                className={cn(
+                                  (pinnedPlacement === "top" || pinnedDrawerThreads.length === 0) &&
+                                    "mt-auto",
+                                )}
                                 label="Working"
                                 count={workingThreads.length}
                                 hostsUndoNotice
@@ -3344,7 +3358,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 key="snoozed-shelf-header"
                                 marker="snoozed-header"
                                 className={cn(
-                                  pinnedDrawerThreads.length + workingThreads.length === 0 &&
+                                  (pinnedPlacement === "top" || pinnedDrawerThreads.length === 0) &&
+                                    workingThreads.length === 0 &&
                                     "mt-auto",
                                 )}
                                 label="Snoozed"
@@ -3363,10 +3378,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 key="settled-shelf-header"
                                 marker="settled-header"
                                 className={cn(
-                                  pinnedDrawerThreads.length +
-                                    workingThreads.length +
-                                    snoozedThreads.length ===
-                                    0 && "mt-auto",
+                                  (pinnedPlacement === "top" || pinnedDrawerThreads.length === 0) &&
+                                    workingThreads.length + snoozedThreads.length === 0 &&
+                                    "mt-auto",
                                 )}
                                 label="Settled"
                                 count={settledCount}
