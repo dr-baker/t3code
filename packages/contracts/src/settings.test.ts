@@ -613,3 +613,17 @@ describe("ClientSettings pinned drawer", () => {
     expect(() => decodeClientSettingsPatch({ sidebarPinnedPopOutWhenReady: "yes" })).toThrow();
   });
 });
+
+describe("Computer Use app-access setting", () => {
+  it("defaults off and round-trips explicit enable and disable patches", () => {
+    expect(decodeServerSettings({}).computerUseAutoApproveAppAccess).toBe(false);
+    for (const enabled of [true, false]) {
+      const patch = decodeServerSettingsPatch({ computerUseAutoApproveAppAccess: enabled });
+      expect(patch).toEqual({ computerUseAutoApproveAppAccess: enabled });
+      expect(
+        decodeServerSettings(encodeServerSettings(decodeServerSettings(patch)))
+          .computerUseAutoApproveAppAccess,
+      ).toBe(enabled);
+    }
+  });
+});

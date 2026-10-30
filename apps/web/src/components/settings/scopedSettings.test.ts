@@ -990,3 +990,23 @@ describe("model selection patches at project scope", () => {
     ).toEqual({ ...saved, options });
   });
 });
+
+it("routes Computer Use app-access approval to the selected environment without project overrides", () => {
+  for (const enabled of [true, false]) {
+    const patch = { computerUseAutoApproveAppAccess: enabled };
+    const plan = planScopedSettingsPatch(named, environments, patch);
+    expect(plan.hasClientWrite).toBe(false);
+    expect(plan.serverWrites).toEqual([
+      {
+        environmentId: server.environmentId,
+        label: server.label,
+        previous: expect.anything(),
+        patch,
+      },
+    ]);
+    expect(planScopedSettingsPatch(project, environments, patch)).toMatchObject({
+      serverWrites: [],
+      unavailableReason: "This setting is environment-wide and cannot be overridden by a project.",
+    });
+  }
+});

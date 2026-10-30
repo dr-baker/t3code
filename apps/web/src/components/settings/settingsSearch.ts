@@ -1109,6 +1109,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/scheduled-tasks",
   },
   {
+    id: "computer-use-auto-approve-app-access",
+    title: "Auto-approve app access",
+    to: "/settings/threads",
+    scope: "environment-defaults",
+    searchTerms: [
+      "computer use codex native app access permission approval generated bundle id automatic",
+    ],
+  },
+  {
     id: "agent-browser-access",
     title: msg("Agent browser access"),
     to: "/settings/browser",

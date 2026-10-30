@@ -228,3 +228,33 @@ export function toMcpElicitationResponse(
     ...(form ? { content } : {}),
   };
 }
+
+const ComputerUseAppAccessMetadata = Schema.Struct({
+  connector_id: Schema.Literal("computer-use"),
+  codex_approval_kind: Schema.Literal("mcp_tool_call"),
+  tool_params: Schema.Struct({ app: Schema.String }),
+});
+const isComputerUseAppAccessMetadata = Schema.is(ComputerUseAppAccessMetadata);
+
+export function computerUseAppAccessAutoApproval(
+  payload: EffectCodexSchema.McpServerElicitationRequestParams,
+  enabled: boolean,
+): EffectCodexSchema.McpServerElicitationRequestResponse | undefined {
+  if (
+    !enabled ||
+    (payload.serverName !== "cua_repl" && payload.serverName !== "computer-use") ||
+    payload.mode === "url" ||
+    !/^Allow (?:Computer Use|ChatGPT|Codex) to use .+\?$/.test(payload.message) ||
+    !isComputerUseAppAccessMetadata(payload._meta) ||
+    payload._meta.tool_params.app.trim().length === 0 ||
+    payload._meta.tool_params.app === "computer-audio"
+  )
+    return undefined;
+
+  // Native app-access prompts carry an empty form; data-collecting forms stay interactive.
+  const form = mcpElicitationFormFields(payload);
+  if (!form || Object.keys(form.properties ?? {}).length > 0 || (form.required?.length ?? 0) > 0) {
+    return undefined;
+  }
+  return toMcpElicitationResponse(payload, "accept");
+}

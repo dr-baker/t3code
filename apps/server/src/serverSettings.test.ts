@@ -3294,3 +3294,30 @@ it.effect("publishes edits made before the restored settings watch is registered
     }).pipe(Effect.provide(settingsLayer));
   }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
+
+it.effect("persists and broadcasts reversible Computer Use app-access auto-approval", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      assert.isFalse((yield* service.getSettings).computerUseAutoApproveAppAccess);
+      for (const enabled of [true, false]) {
+        const changes = yield* service.subscribeChanges;
+        yield* service.updateSettings({ computerUseAutoApproveAppAccess: enabled });
+        const received = Option.getOrThrow(yield* Stream.runHead(changes));
+        assert.equal(received.computerUseAutoApproveAppAccess, enabled);
+        const saved = yield* decodeServerSettingsJson(
+          yield* fs.readFileString(config.settingsPath),
+        );
+        assert.equal(saved.computerUseAutoApproveAppAccess, enabled);
+      }
+    }),
+  ).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
+);

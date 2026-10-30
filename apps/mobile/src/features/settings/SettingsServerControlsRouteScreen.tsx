@@ -407,6 +407,18 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     onValueChange={(value) => write({ enableAgentBrowserAccess: value })}
                   />
                 </SettingsSection>
+                {!projectSelected ? (
+                  <SettingsSection title="Computer Use">
+                    <SettingsSwitchRow
+                      icon="desktopcomputer"
+                      label="Auto-approve app access"
+                      subtitle="Accept Codex Computer Use access to any native app on this environment, including generated apps. Command, file, recording, and other MCP approvals keep their existing policies. Turn off to ask again for new requests."
+                      value={uniform("computerUseAutoApproveAppAccess")}
+                      disabled={disabledFor("computerUseAutoApproveAppAccess")}
+                      onValueChange={(value) => write({ computerUseAutoApproveAppAccess: value })}
+                    />
+                  </SettingsSection>
+                ) : null}
                 <AutoSettleSettingsRows write={write} pending={pendingWrites > 0} />
               </>
             ) : null}

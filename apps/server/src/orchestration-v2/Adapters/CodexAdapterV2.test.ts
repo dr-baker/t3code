@@ -78,6 +78,7 @@ import * as ModelManifest from "../../provider/ModelManifest.ts";
 import * as PortScanner from "../../preview/PortScanner.ts";
 import { resolveProviderCompatibility } from "../../provider/providerCompatibility.ts";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import { withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
 
@@ -3717,6 +3718,148 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           ),
         ),
       ),
+  );
+
+  it.effect("auto-approves only Computer Use app access and reads changes during a session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const nativeThreadId = "computer-use-thread";
+        const nativeTurnId = "computer-use-turn";
+        const prompt = "Inspect the generated app.";
+        const elicitation = (
+          id: number,
+          app: string,
+          serverName = "cua_repl",
+          message = 'Allow Computer Use to use "Generated App"?',
+        ) => ({
+          id,
+          method: "mcpServer/elicitation/request",
+          params: {
+            mode: "form",
+            serverName,
+            threadId: nativeThreadId,
+            turnId: nativeTurnId,
+            message,
+            _meta: {
+              connector_id: "computer-use",
+              codex_approval_kind: "mcp_tool_call",
+              tool_params: { app },
+            },
+            requestedSchema: { type: "object", properties: {} },
+          },
+        });
+        const approval = (id: number, kind: "commandExecution" | "fileChange") => ({
+          id,
+          method: `item/${kind}/requestApproval`,
+          params: {
+            threadId: nativeThreadId,
+            turnId: nativeTurnId,
+            itemId: `item-${id}`,
+            ...(kind === "commandExecution" ? { command: "echo test" } : {}),
+          },
+        });
+        const requests = [
+          elicitation(101, "dev.generated.app-7d94"),
+          elicitation(102, "dev.generated.app-02af"),
+          elicitation(103, "com.example.app", "unrelated-mcp"),
+          elicitation(
+            104,
+            "computer-audio",
+            "cua_repl",
+            "Allow Computer Use to record computer audio?",
+          ),
+          approval(105, "commandExecution"),
+          approval(106, "fileChange"),
+          elicitation(107, "dev.generated.after-disable"),
+        ];
+        const transcript = makeCodexReplayTranscript({
+          scenario: "computer-use-auto-approval",
+          entries: [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt }),
+            ...requests.flatMap((frame): CodexReplay.CodexAppServerReplayEntry[] => [
+              { type: "emit_inbound", label: `request-${frame.id}`, frame },
+              {
+                type: "expect_outbound",
+                label: `response-${frame.id}`,
+                frame: {
+                  id: frame.id,
+                  result:
+                    frame.id === 101 || frame.id === 102
+                      ? { action: "accept", content: {} }
+                      : frame.id === 105 || frame.id === 106
+                        ? { decision: "decline" }
+                        : { action: "decline" },
+                },
+              },
+            ]),
+            {
+              type: "emit_inbound",
+              label: "complete",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const harness = yield* makeCodexReplayHarness(transcript);
+        const interactive = () => [
+          ...new Map(
+            harness.events.flatMap((event) =>
+              event.type === "runtime_request.updated"
+                ? [[event.runtimeRequest.id, event.runtimeRequest] as const]
+                : [],
+            ),
+          ).values(),
+        ];
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("computer-use-attempt"),
+            text: prompt,
+          }),
+        );
+        for (const [index, kind] of [
+          "mcp-elicitation",
+          "mcp-elicitation",
+          "command",
+          "file-change",
+          "mcp-elicitation",
+        ].entries()) {
+          yield* harness.until(() => interactive().length === index + 1);
+          const request = interactive()[index]!;
+          assert.equal(request.kind, kind);
+          if (index === 3)
+            yield* settings.updateSettings({ computerUseAutoApproveAppAccess: false });
+          yield* harness.runtime.respondToRuntimeRequest({
+            requestId: request.id,
+            decision: "decline",
+          });
+        }
+        yield* harness.firstTerminal;
+        assert.deepEqual(
+          interactive().map((request) => request.kind),
+          ["mcp-elicitation", "mcp-elicitation", "command", "file-change", "mcp-elicitation"],
+        );
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+          ServerSettings.layerTest({ computerUseAutoApproveAppAccess: true }),
+        ),
+      ),
+    ),
   );
 
   it.effect("stops asking for commands the user allowed for the session", () =>
