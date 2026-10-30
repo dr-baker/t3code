@@ -27,10 +27,7 @@ import {
   DEFAULT_DESKTOP_SETTINGS,
   DEFAULT_TAILSCALE_SERVE_PORT,
 } from "./DesktopSettingsDefaults.ts";
-export {
-  DEFAULT_DESKTOP_SETTINGS,
-  resolveDefaultDesktopSettings,
-} from "./DesktopSettingsDefaults.ts";
+export { DEFAULT_DESKTOP_SETTINGS } from "./DesktopSettingsDefaults.ts";
 import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 
 export interface DesktopSettings {

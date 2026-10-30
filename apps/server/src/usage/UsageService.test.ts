@@ -4276,7 +4276,9 @@ it.live("prices persisted thread usage without scanning transcripts", () =>
     yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 999999)));
     let fetches = 0;
     yield* Effect.gen(function* () {
-      const context = yield* Layer.build(ProjectionStore.layerMemory);
+      const context = yield* Layer.build(
+        ProjectionStore.layer.pipe(Layer.provideMerge(Sqlite.layerMemory)),
+      );
       const store = Context.get(context, ProjectionStore.ProjectionStoreV2);
       const now = yield* DateTime.now;
       const threadId = ThreadId.make("priced-thread");

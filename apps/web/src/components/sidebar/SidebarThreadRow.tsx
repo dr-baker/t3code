@@ -491,7 +491,9 @@ function CollapsedPinnedThreadTooltipContent(props: CollapsedPinnedThreadTooltip
       }
       modelInstanceId={modelInstanceId}
       modelLabel={
-        selectedModel ? getTriggerDisplayModelLabel(selectedModel) : thread.modelSelection.model
+        selectedModel
+          ? getTriggerDisplayModelName(selectedModel, providerEntry?.driverKind)
+          : thread.modelSelection.model
       }
       branchMismatch={resolveLocalCheckoutBranchMismatch({
         effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",

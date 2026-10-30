@@ -584,9 +584,7 @@ function useSidebarThreads(input: {
           };
         });
   const orderedActiveThreads =
-    projectFolders === null
-      ? activeThreads
-      : projectFolders.flatMap((folder) => folder.threads);
+    projectFolders === null ? activeThreads : projectFolders.flatMap((folder) => folder.threads);
   const orderedThreads = [
     ...(pinnedPlacement === "top"
       ? [...pinnedThreads, ...orderedActiveThreads]
@@ -1867,6 +1865,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     dragging: pinnedDragging,
     duration: pinnedAnimationsActive ? pinnedAnimationDuration : 0,
   };
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- plays or disposes the drawer's imperative FLIP motion as drag state and duration change.
   useLayoutEffect(() => {
     if (pinnedMotionPass.dragging) pinnedMotionRef.current?.dispose();
     else pinnedMotionRef.current?.play(pinnedMotionPass.duration);

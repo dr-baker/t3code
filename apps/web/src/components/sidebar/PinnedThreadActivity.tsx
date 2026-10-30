@@ -49,7 +49,7 @@ export function PinnedThreadActivity(props: {
       scopedThreadKey({ environmentId: thread.environmentId, threadId: thread.id }),
     ),
   ].join("\n");
-  // oxlint-disable-next-line t3code/react-effect-budget -- IntersectionObserver tracks pin visibility as the user scrolls.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- IntersectionObserver tracks pin visibility as the user scrolls.
   useEffect(() => {
     const list = props.listRef.current;
     const header = list?.querySelector('[data-testid="sidebar-pinned-header"]');

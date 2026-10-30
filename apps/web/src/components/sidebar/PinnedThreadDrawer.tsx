@@ -43,7 +43,7 @@ export function PinnedThreadDrawer(props: {
   const container = useRef<HTMLDivElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
   const [width, setWidth] = useState(0);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Resize observation keeps the icon count within the drawer width before paint.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Resize observation keeps the icon count within the drawer width before paint.
   useLayoutEffect(() => {
     const node = container.current;
     if (!node) return;
