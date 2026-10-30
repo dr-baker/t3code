@@ -1,4 +1,6 @@
 import { pipe } from "effect/Function";
+
+import * as ServerSettings from "../../serverSettings.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { brokenRuntimeError } from "../../provider/providerCompatibility.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
@@ -117,6 +119,7 @@ import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { buildCodexAdditionalContext } from "../../provider/CodexDeveloperInstructions.ts";
 import {
+  computerUseAppAccessAutoApproval,
   describeMcpElicitation,
   toMcpElicitationResponse,
 } from "../../provider/CodexMcpElicitation.ts";
@@ -1988,6 +1991,7 @@ export interface CodexAdapterV2Options {
 export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
+  const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const readMcpSession = (threadId: ThreadId | null) =>
     threadId === null ? Effect.undefined : mcpSessions.read(threadId);
@@ -6211,6 +6215,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if (context.input.runtimePolicy.runtimeMode === "full-access") {
               return acceptance;
             }
+            const autoApproveAppAccess = Option.isSome(serverSettings)
+              ? yield* serverSettings.value.getSettings.pipe(
+                  Effect.map((settings) => settings.computerUseAutoApproveAppAccess),
+                  Effect.orElseSucceed(() => false),
+                )
+              : false;
+            const automaticResponse = computerUseAppAccessAutoApproval(
+              payload,
+              autoApproveAppAccess,
+            );
+            if (automaticResponse) return automaticResponse;
 
             const nativeRequestId =
               payload.mode === "url"

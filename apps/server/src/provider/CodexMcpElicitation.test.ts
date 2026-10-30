@@ -3,7 +3,11 @@ import * as NodeAssert from "node:assert/strict";
 import { describe, it } from "vite-plus/test";
 import type * as EffectCodexSchema from "effect-codex-app-server/schema";
 
-import { describeMcpElicitation, toMcpElicitationResponse } from "./CodexMcpElicitation.ts";
+import {
+  computerUseAppAccessAutoApproval,
+  describeMcpElicitation,
+  toMcpElicitationResponse,
+} from "./CodexMcpElicitation.ts";
 
 describe("Codex MCP elicitation approvals", () => {
   const request = {
@@ -188,4 +192,66 @@ describe("Codex MCP elicitation approvals", () => {
       { decision: "accept", label: "Approve" },
     ]);
   });
+});
+
+describe("Computer Use app-access auto-approval", () => {
+  const request = {
+    mode: "form",
+    message: 'Allow Computer Use to use "Generated Preview"?',
+    serverName: "cua_repl",
+    threadId: "native-thread",
+    turnId: "native-turn",
+    _meta: {
+      codex_approval_kind: "mcp_tool_call",
+      connector_id: "computer-use",
+      tool_name: "get_app_state",
+      tool_params: { app: "dev.generated.preview-4f93" },
+      persist: ["session", "always"],
+    },
+    requestedSchema: { type: "object", properties: {} },
+  } satisfies EffectCodexSchema.McpServerElicitationRequestParams;
+
+  it.each(["dev.generated.preview-4f93", "org.temp.test-f97b", "com.apple.Safari"])(
+    "accepts app %s without a stored allow list or permanent grant",
+    (app) => {
+      NodeAssert.deepStrictEqual(
+        computerUseAppAccessAutoApproval(
+          {
+            ...request,
+            _meta: { ...request._meta, tool_params: { app } },
+          },
+          true,
+        ),
+        { action: "accept", content: {} },
+      );
+    },
+  );
+
+  it("restores interactive handling when disabled", () => {
+    NodeAssert.equal(computerUseAppAccessAutoApproval(request, false), undefined);
+  });
+
+  it.each([
+    { serverName: "unrelated-mcp" },
+    { message: "Allow Computer Use to record computer audio?" },
+    { message: "Allow Computer Use to record your actions on your Mac?" },
+    { message: "Approve this payment?" },
+    { _meta: { ...request._meta, connector_id: "payments" } },
+    { _meta: { ...request._meta, codex_approval_kind: "other" } },
+    { _meta: { ...request._meta, tool_params: {} } },
+    { _meta: { ...request._meta, tool_params: { app: "" } } },
+    { _meta: { ...request._meta, tool_params: { app: "computer-audio" } } },
+    {
+      requestedSchema: {
+        type: "object",
+        properties: { email: { type: "string", default: "a@b.com" } },
+      },
+    },
+    { mode: "url", url: "https://example.com", elicitationId: "signin" },
+  ] satisfies ReadonlyArray<Partial<EffectCodexSchema.McpServerElicitationRequestParams>>)(
+    "leaves unrelated or unrecognized elicitations interactive: %j",
+    (patch) => {
+      NodeAssert.equal(computerUseAppAccessAutoApproval({ ...request, ...patch }, true), undefined);
+    },
+  );
 });

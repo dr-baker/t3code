@@ -24,6 +24,18 @@ Approve or reject requests in the conversation to let the agent continue. Permis
 not prevent the agent from asking questions about the task. Subagent approval requests appear in
 the parent conversation with the subagent's name, so you can respond without switching threads.
 
+## Computer Use app access
+
+In **Settings → Threads → Computer Use**, enable **Auto-approve app access** for the
+environment running Codex to accept native-app access requests, including requests for newly
+generated apps. It defaults off and applies to all Codex threads on that environment, including
+threads controlled remotely or from mobile. Command, file, recording, and other MCP approvals
+keep their existing policies.
+
+Turn it off to restore prompts for new app-access requests. Already approved access may last
+for the current Computer Use session. This setting does not save permanent app grants or answer
+prompts that are already pending.
+
 ## Provider differences
 
 Providers enforce permissions differently. Some read-only actions can proceed in **Supervised**.

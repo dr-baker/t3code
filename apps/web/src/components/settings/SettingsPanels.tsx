@@ -555,6 +555,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
       ? [gt("Auto-settle merged threads")]
       : []),
+    ...(settings.computerUseAutoApproveAppAccess !==
+    DEFAULT_UNIFIED_SETTINGS.computerUseAutoApproveAppAccess
+      ? ["Computer Use app access"]
+      : []),
     ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
       ? [gt("Resume after usage limits")]
       : []),
@@ -743,6 +747,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
+      computerUseAutoApproveAppAccess: DEFAULT_UNIFIED_SETTINGS.computerUseAutoApproveAppAccess,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       snoozePresets: DEFAULT_UNIFIED_SETTINGS.snoozePresets,
@@ -2189,6 +2194,33 @@ export function ThreadsSettingsPanel() {
           <SnoozePresetsRow />
         </SettingsSection>
       ) : null}
+
+      <SettingsSection id="computer-use" title="Computer Use">
+        <SettingsRow
+          serverScoped
+          settingKeys={["computerUseAutoApproveAppAccess"]}
+          {...setting("computer-use-auto-approve-app-access")}
+          description="Automatically accept Codex Computer Use requests to access any native app on this environment, including newly generated apps. Command, file, recording, and other MCP approvals keep their existing policies. Turn off to ask again for new app-access requests."
+          resetAction={
+            settings.computerUseAutoApproveAppAccess ? (
+              <SettingResetButton
+                label="Computer Use app-access approval"
+                onClick={() => updateSettings({ computerUseAutoApproveAppAccess: false })}
+              />
+            ) : null
+          }
+          control={
+            <ScopedSwitch
+              settingKeys={["computerUseAutoApproveAppAccess"]}
+              aria-label="Auto-approve app access"
+              checked={settings.computerUseAutoApproveAppAccess}
+              onCheckedChange={(checked) =>
+                updateSettings({ computerUseAutoApproveAppAccess: Boolean(checked) })
+              }
+            />
+          }
+        />
+      </SettingsSection>
 
       <SettingsSection id="usage-limits" title={gt("Usage limits")}>
         <SettingsRow
