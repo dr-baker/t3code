@@ -28,6 +28,7 @@ import type {
   ChatFileAttachment,
   EnvironmentId,
   ModelSelection,
+  OrchestrationV2PlanArtifact,
   ProjectId,
   PreviewAnnotationPayload,
   ThreadContextRecord,
@@ -221,6 +222,7 @@ import {
 import { CollapsedComposerStopAction, ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerFooterPrimaryActions } from "./ComposerFooterControls";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
+import { ComposerPlan } from "./ComposerPlan";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
 import { getComposerPromptInjectionState, getComposerReasoningStep } from "./composerProviderState";
@@ -391,6 +393,10 @@ export interface ChatComposerProps {
   isPreparingWorktree: boolean;
   canSteer: boolean;
   bannerItems: readonly ComposerBannerStackItem[];
+  currentPlan?: {
+    plan: Extract<OrchestrationV2PlanArtifact, { kind: "todo_list" }>;
+    working: boolean;
+  } | null;
   resumeCompactionTokens: number | null;
   keepFullHistory: boolean;
   onToggleKeepFullHistory: () => void;
@@ -3481,6 +3487,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       <ComposerBanner.Dock>
         <ComposerBanner.Column>
           <ComposerBannerStack items={shelfItems} />
+          {!showComposerTopDrawer && props.currentPlan ? (
+            <ComposerBanner.Attachment>
+              <ComposerBanner.Root>
+                <ComposerPlan plan={props.currentPlan.plan} working={props.currentPlan.working} />
+              </ComposerBanner.Root>
+            </ComposerBanner.Attachment>
+          ) : null}
           {showComposerTopDrawer ? (
             <ComposerBanner.Attachment>
               <ComposerBanner.Root data-chat-composer-top-drawer="true" variant="info">

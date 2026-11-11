@@ -239,6 +239,49 @@ export function derivePendingUserInputs(
   return [...inputs].toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
 }
 
+function planItemTime(
+  projection: ThreadStructure,
+  plan: Pick<OrchestrationV2PlanArtifact, "id" | "runId">,
+): string {
+  const item = projection.turnItems.findLast(
+    (candidate) =>
+      (candidate.type === "proposed_plan" || candidate.type === "todo_list") &&
+      candidate.planId === plan.id,
+  );
+  if (item?.type === "proposed_plan" || item?.type === "todo_list") {
+    return DateTime.formatIso(item.updatedAt);
+  }
+  // Without a plan item, the plan's run dates it; the thread's own timestamps move while a reply streams.
+  const run = projection.runs.find((candidate) => candidate.id === plan.runId);
+  return DateTime.formatIso(
+    run?.completedAt ?? run?.startedAt ?? run?.requestedAt ?? projection.thread.createdAt,
+  );
+}
+
+export function findComposerPlan(projection: ThreadStructure | null, latestRunId: RunId | null) {
+  if (projection === null || latestRunId === null) return null;
+  const rootNodeId = projection.runs.find((run) => run.id === latestRunId)?.rootNodeId;
+  const nodes = new Map(projection.nodes.map((node) => [node.id, node]));
+  return (
+    projection.plans
+      .filter((plan) => {
+        if (
+          plan.kind !== "todo_list" ||
+          plan.runId !== latestRunId ||
+          plan.status === "superseded" ||
+          plan.status === "draft"
+        )
+          return false;
+        const node = nodes.get(plan.nodeId);
+        return node === undefined || node.parentNodeId === null || node.parentNodeId === rootNodeId;
+      })
+      .toSorted((left, right) =>
+        planItemTime(projection, left).localeCompare(planItemTime(projection, right)),
+      )
+      .findLast((plan) => plan.kind === "todo_list") ?? null
+  );
+}
+
 const STANDALONE_V2_ITEM_TYPES = new Set<OrchestrationV2ProjectedTurnItem["item"]["type"]>([
   "fork",
   "handoff",

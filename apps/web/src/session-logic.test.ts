@@ -31,6 +31,7 @@ import {
   deriveRevertTurnCountByUserMessageId,
   derivePhase,
   findRevertCheckpoint,
+  findComposerPlan,
   isLatestRunSettled,
   selectHandoffImageResources,
   selectMessageImageResources,
@@ -685,6 +686,20 @@ describe("V2 session presentation", () => {
           steps,
         },
       ];
+
+      const withPlan = { ...projection, plans, turnItems: [item] };
+      expect(findComposerPlan(withPlan, runId)).toEqual(plans[0]);
+      expect(findComposerPlan(withPlan, RunId.make("next-run"))).toBeNull();
+      expect(findComposerPlan(withPlan, null)).toBeNull();
+      expect(findComposerPlan(null, runId)).toBeNull();
+      for (const status of ["superseded", "draft"] as const) {
+        expect(
+          findComposerPlan(
+            { ...withPlan, plans: plans.map((plan) => ({ ...plan, status })) },
+            runId,
+          ),
+        ).toBeNull();
+      }
 
       expect(
         deriveTimelineEntriesFromVisibleTurnItems({
