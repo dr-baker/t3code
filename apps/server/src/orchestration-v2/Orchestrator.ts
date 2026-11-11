@@ -669,6 +669,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.pull-request-watch.checks-reopen":
     case "thread.pull-request.sync":
     case "thread.title.regeneration.complete":
+    case "thread.project.move":
     case "thread.project.adopt-folder":
     case "thread.runtime-mode.set":
     case "thread.interaction-mode.set":
@@ -5833,6 +5834,90 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       yield* Ref.update(effects, (existing) => [...existing, pendingEffect]);
     },
   );
+
+  const projectMoveFamily = Effect.fn("Orchestrator.projectMoveFamily")(function* (
+    threadId: ThreadId,
+  ) {
+    const snapshot = yield* projectionStore
+      .getShellSnapshot({ familyOf: threadId })
+      .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+    const family = [...snapshot.threads, ...snapshot.archivedThreads];
+    const parents = new Map(family.map((thread) => [thread.id, thread.lineage.parentThreadId]));
+    const depth = (id: ThreadId) => {
+      const seen = new Set<ThreadId>();
+      let parent = parents.get(id);
+      while (parent != null && !seen.has(parent)) {
+        seen.add(parent);
+        parent = parents.get(parent);
+      }
+      return seen.size;
+    };
+    // Other multi-thread commands acquire the parent before its children.
+    return family.toSorted((a, b) => depth(a.id) - depth(b.id) || a.id.localeCompare(b.id));
+  });
+
+  const dispatchThreadProjectMove = Effect.fn("Orchestrator.dispatchThreadProjectMove")(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "thread.project.move" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const reject = (cause: string) =>
+      new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause,
+      });
+    const target = yield* projects.get(command.projectId).pipe(mapDispatchError(command));
+    if (Option.isNone(target) || target.value.deletedAt !== null) {
+      return yield* reject("The destination project no longer exists.");
+    }
+    if (target.value.archivedAt != null) {
+      return yield* reject("Unarchive the destination project before moving threads into it.");
+    }
+    const family = yield* projectMoveFamily(command.threadId);
+    if (!family.some((thread) => thread.id === command.threadId)) {
+      return yield* reject("The thread no longer exists.");
+    }
+    const now = yield* DateTime.now;
+    for (const member of family) {
+      const records = yield* projectionStore
+        .getThreadRecords(member.id, ["runs", "runtimeRequests", "providerThreads"], {
+          turnItemTypes: [],
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: member.id, cause }),
+          ),
+        );
+      const thread = records.thread;
+      yield* refuseAboveDispatchModeLimit(command, member.id, thread);
+      if (
+        threadHasUnfinishedWork(records) ||
+        records.providerThreads.some(
+          (provider) =>
+            provider.status === "active" ||
+            backgroundWorkHoldsCompletion(provider.pendingBackgroundTasks ?? []),
+        )
+      ) {
+        return yield* reject(
+          `"${thread.title}" is still working or waiting for an answer. Finish or stop it first.`,
+        );
+      }
+      const source = yield* projects.get(thread.projectId).pipe(mapDispatchError(command));
+      const cwd = thread.worktreePath ?? Option.getOrUndefined(source)?.workspaceRoot;
+      if (cwd === undefined)
+        return yield* reject(`The working folder for "${thread.title}" could not be found.`);
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: thread.id,
+        providerInstanceId: thread.providerInstanceId,
+        occurredAt: now,
+        payload: { ...thread, projectId: command.projectId, worktreePath: cwd, updatedAt: now },
+      });
+    }
+  });
 
   const dispatchThreadProjectAdoptFolder = Effect.fn(
     "orchestrationV2.dispatch.threadProjectAdoptFolder",
@@ -15844,6 +15929,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "provider-session.detach":
         yield* dispatchProviderSessionDetach(command, events, effects);
         break;
+      case "thread.project.move":
+        yield* dispatchThreadProjectMove(command, events);
+        break;
       case "thread.project.adopt-folder":
         yield* dispatchThreadProjectAdoptFolder(command, events);
         break;
@@ -16434,6 +16522,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   // dispatchWithReceiptEffect owns the dispatch span; this wrapper selects the thread locks.
   const dispatchWithReceipt = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
+    if (command.type === "thread.project.move") {
+      while (true) {
+        const family = yield* projectMoveFamily(command.threadId);
+        const ids = family.map((thread) => thread.id);
+        const move = Effect.gen(function* () {
+          const current = yield* projectMoveFamily(command.threadId);
+          if (
+            current.length !== ids.length ||
+            current.some((thread, index) => thread.id !== ids[index])
+          )
+            return null;
+          return yield* dispatchWithReceiptEffect(command);
+        });
+        const result = yield* ids.reduceRight(
+          (locked, id) => threadDispatch.withLock(id, locked),
+          move,
+        );
+        if (result !== null) return result;
+      }
+    }
     const dispatch = threadDispatch.withLock(
       commandThreadId(command),
       dispatchWithReceiptEffect(command),

@@ -61,6 +61,7 @@ import {
   unsettleThread,
   unsnoozeThread,
   updateThreadMetadata,
+  moveThreadProject,
   visitThread,
   watchThreadPullRequest,
 } from "../operations/commands.ts";
@@ -292,6 +293,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     markUnread: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:mark-unread",
       execute: markThreadUnread,
+      scheduler,
+      concurrency,
+    }),
+    moveProject: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:move-project",
+      execute: moveThreadProject,
       scheduler,
       concurrency,
     }),

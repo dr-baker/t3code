@@ -73,6 +73,7 @@ import { useThreadPr } from "../../state/use-thread-pr";
 import { useSwipeRowDormant } from "../home/swipe-row-activation";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
+import { moveThreadToProject, useThreadProjectMoveTargets } from "./moveThreadToProject";
 import { canTurnThreadIntoProject, turnThreadIntoProject } from "./turnThreadIntoProject";
 import { threadCanArchive } from "../home/threadArchive";
 import { useCanShareWithGuest } from "./useCanShareWithGuest";
@@ -1060,6 +1061,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [gt, props.autoSettleOptOutSupported, thread.autoSettleDisabledAt],
   );
   const canTurnIntoProject = canTurnThreadIntoProject(thread);
+  const projectMoveTargets = useThreadProjectMoveTargets(thread);
   const titleMenuItems = useMemo<MenuAction[]>(
     () => [
       {
@@ -1075,6 +1077,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         m,
       ),
       { id: "mark-unread", title: gt("Mark unread"), image: "envelope.badge" },
+      ...(projectMoveTargets
+        ? [
+            {
+              id: "move-project",
+              title: "Move to project…",
+              image: "folder",
+              attributes: {
+                disabled: !threadCanArchive(thread.runtime) || projectMoveTargets.length === 0,
+              },
+              subactions: projectMoveTargets.map((project) => ({
+                id: `move-project:${project.id}`,
+                title: project.title,
+                image: "folder",
+              })),
+            } satisfies MenuAction,
+          ]
+        : []),
       ...(canTurnIntoProject
         ? [
             {
@@ -1090,6 +1109,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       canTurnIntoProject,
       gt,
       m,
+      projectMoveTargets,
       props.titleRegenerationSupported,
       thread.runtime,
       isRegeneratingTitle,
@@ -1221,6 +1241,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
+      const projectMoveTarget = projectMoveTargets?.find(
+        (project) => nativeEvent.event === `move-project:${project.id}`,
+      );
+      if (projectMoveTarget) moveThreadToProject(thread, projectMoveTarget);
       if (nativeEvent.event === "turn-into-project") void turnThreadIntoProject(thread);
       if (nativeEvent.event === "mark-unread") {
         void markThreadUnread({
@@ -1291,6 +1315,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       setCustomSnoozeOpen,
       snoozePresets,
       props.snoozePresets,
+      projectMoveTargets,
     ],
   );
   const primaryAction = useMemo(() => {

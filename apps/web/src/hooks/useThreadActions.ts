@@ -5,7 +5,11 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import {
@@ -13,6 +17,7 @@ import {
   AuthSourceControlWriteScope,
   EnvironmentAuthorizationError,
   EnvironmentId,
+  type ProjectId,
   type ScopedThreadRef,
   ThreadId,
   sessionGrantsScope,
@@ -46,6 +51,7 @@ import {
   readEnvironmentSupportsAutoSettleOptOut,
   readEnvironmentThreadRefs,
   readProject,
+  readProjects,
   readThreadShell,
   readThreadShells,
 } from "../state/entities";
@@ -300,6 +306,20 @@ function threadOperationFailure(target: ScopedThreadRef) {
       );
 }
 
+export function threadProjectMoveTargets(target: ScopedThreadRef) {
+  const config = appAtomRegistry.get(environmentServerConfigsAtom).get(target.environmentId);
+  const thread = readThreadShell(target);
+  if (!thread || config?.environment.capabilities.threadProjectMove !== true) return undefined;
+  return readProjects()
+    .filter(
+      (project) =>
+        project.environmentId === target.environmentId &&
+        project.id !== thread.projectId &&
+        project.archivedAt == null,
+    )
+    .toSorted((a, b) => a.title.localeCompare(b.title));
+}
+
 export function useThreadActions() {
   const archiveThreadMutation = useOrchestrationCommand(threadEnvironment.archive, {
     reportFailure: false,
@@ -339,6 +359,9 @@ export function useThreadActions() {
   });
   const markThreadUnread = useMarkThreadUnread();
   const createProjectFromThread = useAtomCommand(projectEnvironment.createFromThread, {
+    reportFailure: false,
+  });
+  const moveThreadProjectMutation = useOrchestrationCommand(threadEnvironment.moveProject, {
     reportFailure: false,
   });
   const stopThreadSession = useOrchestrationCommand(threadEnvironment.stopSession);
@@ -1061,6 +1084,39 @@ export function useThreadActions() {
     reorderActiveThread,
     markThreadUnread,
     setThreadAutoSettle,
+    moveThreadToProject: async (target: ScopedThreadRef, projectId: ProjectId) => {
+      const project = threadProjectMoveTargets(target)?.find(
+        (candidate) => candidate.id === projectId,
+      );
+      const api = readLocalApi();
+      if (!project || !api) return;
+      const confirmed = await settlePromise(() =>
+        api.dialogs.confirm(
+          `Move this conversation and all its forks to "${project.title}"?\n\nWorking folders and files stay where they are. Future turns keep using those folders.`,
+        ),
+      );
+      if (confirmed._tag === "Failure" || !confirmed.value) return;
+      const result = await moveThreadProjectMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, projectId },
+      });
+      if (result._tag === "Success")
+        toastManager.add({
+          type: "success",
+          title: "Conversation moved",
+          description: project.title,
+        });
+      else if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not move conversation",
+            description: error instanceof Error ? error.message : "Try again.",
+          }),
+        );
+      }
+    },
     turnThreadIntoProject: (target: ScopedThreadRef) =>
       createProjectFromThread({
         environmentId: target.environmentId,

@@ -48,6 +48,12 @@ moves and the agent keeps working in the same place. Other threads in that folde
 move with it. Rename the project in its settings, and use **Initialize Git** to
 get branch and diff controls.
 
+### Move an existing conversation
+
+Choose **Move to project…** from a thread's menu to organize it under another project on the same machine. This moves the entire fork family, including side chats, archived forks, and attached subagents. Every member must be idle, with no queued work or unanswered requests.
+
+Working folders, files, provider conversations, and thread links stay in place. Future turns continue using the original folders rather than the destination project's root. Bound schedules follow the moved threads. You can move the family back through the same menu.
+
 ### Start in the background
 
 In a desktop browser or the desktop app, press `Cmd+Enter` on macOS or `Ctrl+Enter`

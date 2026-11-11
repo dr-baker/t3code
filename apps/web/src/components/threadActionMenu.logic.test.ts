@@ -80,3 +80,19 @@ describe("buildThreadActionMenuItems", () => {
     expect(items.filter((item) => item.disabled).map((item) => item.id)).toEqual(["rename"]);
   });
 });
+
+describe("project move menu", () => {
+  it("offers destinations and disables moving for busy and read-only threads", () => {
+    for (const override of [{}, { isRunning: true }, { canOperate: false }]) {
+      const state = {
+        ...baseState,
+        ...override,
+        projectMoveTargets: [{ id: "target", title: "Research" }],
+      };
+      const item = buildThreadActionMenuItems(state).find((item) => item.id === "move-project");
+      expect(item?.disabled).toBe(state.isRunning || !state.canOperate);
+      expect(item?.children?.[0]?.id).toBe("move-project:target");
+      if (!state.canOperate) expect(item?.children?.[0]?.disabled).toBe(true);
+    }
+  });
+});

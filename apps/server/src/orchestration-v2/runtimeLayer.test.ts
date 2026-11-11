@@ -75,6 +75,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import { DispatchModeLimit } from "./DispatchModeLimit.ts";
 import { ROLLBACK_FAILED_MESSAGE } from "./CheckpointRollbackService.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -14412,3 +14413,247 @@ it.layer(layerQueueResumeDisabledInstanceTest)(
     );
   },
 );
+
+it.layer(layerProjectDeletionTest)("moving conversations between projects", (it) => {
+  const setupMove = Effect.fn("test.setupProjectMove")(function* (name: string) {
+    const projects = yield* ProjectService.ProjectService;
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const source = ProjectId.make(`move-${name}-source`);
+    const target = ProjectId.make(`move-${name}-target`);
+    const root = ThreadId.make(`move-${name}-root`);
+    const fork = ThreadId.make(`move-${name}-fork`);
+    for (const projectId of [source, target])
+      yield* projects.create({
+        commandId: CommandId.make(`create-${projectId}`),
+        projectId,
+        title: projectId,
+        workspaceRoot: `/work/${projectId}`,
+      });
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make(`create-${root}`),
+      threadId: root,
+      projectId: source,
+      title: "Original",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: "feature/keep",
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make(`message-${root}`),
+      threadId: root,
+      messageId: MessageId.make(`message-${root}`),
+      text: "Keep this original conversation",
+      attachments: [],
+      modelSelection,
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const started = yield* orchestrator.getThreadRecords(root, ["runs", "providerThreads"]);
+    const run = started.runs[0];
+    const provider = started.providerThreads[0];
+    if (!run || !provider) return yield* Effect.die("Expected a started conversation");
+    const now = yield* DateTime.now;
+    const sink = yield* EventSink.EventSinkV2;
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make(`completed-${root}`),
+          type: "run.updated",
+          threadId: root,
+          runId: run.id,
+          occurredAt: now,
+          payload: { ...run, status: "completed", completedAt: now },
+        },
+        {
+          id: EventId.make(`native-${root}`),
+          type: "provider-thread.updated",
+          threadId: root,
+          occurredAt: now,
+          payload: {
+            ...provider,
+            status: "idle",
+            nativeThreadRef: {
+              driver: provider.driver,
+              nativeId: `native-${root}`,
+              strength: "strong",
+            },
+            updatedAt: now,
+          },
+        },
+      ],
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.fork",
+      commandId: CommandId.make(`create-${fork}`),
+      sourceThreadId: root,
+      targetThreadId: fork,
+      sourcePoint: { type: "latest_stable" },
+      sideChat: true,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    return { orchestrator, projects, source, target, root, fork };
+  });
+
+  it.effect(
+    "moves the entire family from a fork, preserving folders and history, and moves back",
+    () =>
+      Effect.gen(function* () {
+        const { orchestrator, source, target, root, fork } = yield* setupMove("round-trip");
+        const before = yield* orchestrator.getThreadRecords(root, [
+          "messages",
+          "providerThreads",
+          "contextTransfers",
+        ]);
+        const tasks = yield* ScheduledTaskService.ScheduledTaskService;
+        yield* tasks.upsert({
+          id: ScheduledTaskId.make("move-family-schedule"),
+          title: "Check in",
+          prompt: "Check in",
+          enabled: false,
+          schedule: { type: "interval", everyMs: 60_000 },
+          projectId: source,
+          threadId: fork,
+          workspaceStrategy: { type: "root" },
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* orchestrator.dispatch({
+          type: "thread.archive",
+          commandId: CommandId.make("move-archive-fork"),
+          threadId: fork,
+        });
+        const command = {
+          type: "thread.project.move" as const,
+          commandId: CommandId.make("move-round-trip"),
+          threadId: fork,
+          projectId: target,
+        };
+        const moved = yield* orchestrator.dispatch(command);
+        for (const threadId of [root, fork]) {
+          const after = yield* orchestrator.getThreadRecords(threadId, []);
+          assert.equal(after.thread.projectId, target);
+          assert.equal(after.thread.worktreePath, `/work/${source}`);
+          assert.equal(after.thread.branch, "feature/keep");
+        }
+        assert.isNotNull((yield* orchestrator.getThreadRecords(fork, [])).thread.archivedAt);
+        const after = yield* orchestrator.getThreadRecords(root, [
+          "messages",
+          "providerThreads",
+          "contextTransfers",
+        ]);
+        assert.isAbove(before.messages.length, 0);
+        assert.isAbove(before.providerThreads.length, 0);
+        assert.deepEqual(after.messages, before.messages);
+        assert.deepEqual(after.providerThreads, before.providerThreads);
+        assert.deepEqual(after.contextTransfers, before.contextTransfers);
+        assert.deepEqual(after.thread.lineage, before.thread.lineage);
+        assert.isTrue((yield* orchestrator.dispatch(command)).replayed === true);
+        assert.equal(moved.storedEvents.length, 2);
+        assert.equal(
+          (yield* tasks.list()).tasks.find((task) => task.threadId === fork)?.projectId,
+          target,
+        );
+        yield* orchestrator.dispatch({
+          ...command,
+          commandId: CommandId.make("move-round-trip-back"),
+          threadId: root,
+          projectId: source,
+        });
+        assert.equal((yield* orchestrator.getThreadRecords(fork, [])).thread.projectId, source);
+      }),
+  );
+
+  it.effect("rejects the whole move while any fork has queued or running work", () =>
+    Effect.gen(function* () {
+      const { orchestrator, source, target, root, fork } = yield* setupMove("busy");
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("move-busy-message"),
+        threadId: fork,
+        messageId: MessageId.make("move-busy-message"),
+        text: "Keep working",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const failure = yield* orchestrator
+        .dispatch({
+          type: "thread.project.move",
+          commandId: CommandId.make("move-busy"),
+          threadId: root,
+          projectId: target,
+        })
+        .pipe(Effect.flip);
+      assert.include(String(failure.cause), "still working");
+      for (const id of [root, fork])
+        assert.equal((yield* orchestrator.getThreadRecords(id, [])).thread.projectId, source);
+    }),
+  );
+
+  it.effect("refuses missing and archived destinations without changing any thread", () =>
+    Effect.gen(function* () {
+      const { orchestrator, projects, source, target, root, fork } =
+        yield* setupMove("invalid-target");
+      yield* projects.update({
+        commandId: CommandId.make("move-archive-target"),
+        projectId: target,
+        archived: true,
+      });
+      for (const projectId of [ProjectId.make("move-missing"), target]) {
+        yield* orchestrator
+          .dispatch({
+            type: "thread.project.move",
+            commandId: CommandId.make(`move-to-${projectId}`),
+            threadId: root,
+            projectId,
+          })
+          .pipe(Effect.flip);
+        for (const id of [root, fork])
+          assert.equal((yield* orchestrator.getThreadRecords(id, [])).thread.projectId, source);
+      }
+    }),
+  );
+  it.effect(
+    "checks the caller's mode limit for every member without partially moving the family",
+    () =>
+      Effect.gen(function* () {
+        const { orchestrator, source, target, root, fork } = yield* setupMove("mode-limit");
+        yield* orchestrator.dispatch({
+          type: "thread.runtime-mode.set",
+          commandId: CommandId.make("move-lower-root"),
+          threadId: root,
+          runtimeMode: "auto",
+        });
+        const error = yield* orchestrator
+          .dispatch({
+            type: "thread.project.move",
+            commandId: CommandId.make("move-mode-limit"),
+            threadId: root,
+            projectId: target,
+          })
+          .pipe(
+            Effect.provideService(DispatchModeLimit, {
+              runtimeMode: "auto",
+              interactionMode: "default",
+            }),
+            Effect.flip,
+          );
+        assert.equal(error._tag, "OrchestratorThreadAboveModeLimitError");
+        for (const id of [root, fork])
+          assert.equal((yield* orchestrator.getThreadRecords(id, [])).thread.projectId, source);
+      }),
+  );
+});
