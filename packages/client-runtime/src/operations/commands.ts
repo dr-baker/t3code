@@ -705,6 +705,17 @@ export const markThreadUnread = Effect.fn("EnvironmentCommands.markThreadUnread"
   });
 });
 
+export const moveThreadProject = Effect.fn("EnvironmentCommands.moveThreadProject")(function* (
+  input: CommandMetadata & { readonly threadId: ThreadId; readonly projectId: ProjectId },
+) {
+  return yield* dispatch({
+    type: "thread.project.move",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    projectId: input.projectId,
+  });
+});
+
 export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadMetadata")(
   function* (input: UpdateThreadMetadataInput) {
     const commandId = yield* allocateCommandId(input);

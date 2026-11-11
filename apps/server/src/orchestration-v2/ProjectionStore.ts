@@ -2572,6 +2572,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 deleted_at = excluded.deleted_at,
                 payload_json = excluded.payload_json
             `;
+              if (event.type === "thread.metadata-updated") {
+                yield* sql`UPDATE scheduled_tasks SET project_id = ${event.payload.projectId}
+                  WHERE thread_id = ${event.threadId} AND project_id != ${event.payload.projectId}`;
+              }
               break;
             }
             case "run.created":

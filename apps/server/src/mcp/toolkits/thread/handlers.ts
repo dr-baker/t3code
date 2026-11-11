@@ -411,6 +411,13 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       }
       let command: OrchestrationV2Command;
       switch (input.action) {
+        case "move_project":
+          command = {
+            ...common,
+            type: "thread.project.move",
+            projectId: yield* required(input.projectId, "projectId"),
+          };
+          break;
         case "snooze":
           if (input.snoozedUntil === undefined) {
             return yield* new OrchestratorMcpFailure({
