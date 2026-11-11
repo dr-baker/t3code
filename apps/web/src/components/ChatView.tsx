@@ -164,6 +164,7 @@ import {
   derivePhase,
   deriveActiveWorkStartedAt,
   deriveCanInterruptRunningThread,
+  findComposerPlan,
   findRevertCheckpoint,
   isLatestRunSettled,
 } from "../session-logic";
@@ -1173,6 +1174,7 @@ export default function ChatView(props: ChatViewProps) {
   const [chatCanvasStore] = useState(createChatCanvasStore);
 
   const latestRunSettled = isLatestRunSettled(activeLatestRun, activeRuntime);
+  const composerPlan = findComposerPlan(serverProjection, activeLatestRun?.runId ?? null);
   const activeThreadEnvironmentId = activeThread?.environmentId;
   const activeThreadProjectId = activeThread?.projectId;
   const activeProjectRef =
@@ -3771,6 +3773,7 @@ export default function ChatView(props: ChatViewProps) {
                             ) : null}
                             {!composerMounted ? null : (
                               <ChatComposer
+                                currentPlan={composerPlan ? { plan: composerPlan, working: !latestRunSettled } : null}
                                 canOperateThread={canOperateThread}
                                 reportedModelSelection={reportedModelSelection}
                                 multipleModelSelections={multipleModelSelections}
