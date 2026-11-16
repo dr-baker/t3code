@@ -270,6 +270,7 @@ export function createEnvironmentThreadShellAtoms(input: {
   readonly hiddenThreadTagsAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<ReadonlyArray<string> | null>;
+  readonly lookupThreadAtom: (ref: ScopedThreadRef) => Atom.Atom<OrchestrationV2ThreadShell | null>;
 }) {
   // Point reads and aggregate lists share values without keeping an atom alive
   // for every listed thread. Replaced source objects can be collected.
@@ -470,7 +471,9 @@ export function createEnvironmentThreadShellAtoms(input: {
   const threadShellAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
     return Atom.make((get) => {
-      const source = get(environmentThreadIndexAtom(ref.environmentId)).get(ref.threadId) ?? null;
+      const source =
+        get(environmentThreadIndexAtom(ref.environmentId)).get(ref.threadId) ??
+        get(input.lookupThreadAtom(ref));
       return source === null
         ? null
         : scopedThread(

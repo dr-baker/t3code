@@ -3,6 +3,7 @@ import {
   ProjectId,
   RunId,
   RuntimeRequestId,
+  type ScopedThreadRef,
   ThreadId,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ThreadShell,
@@ -30,6 +31,9 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
   const snapshotAtom = Atom.family((_environmentId: EnvironmentId) =>
     Atom.make<OrchestrationV2ShellSnapshot | null>(v2ShellSnapshot),
   );
+  const lookupThreadAtom = Atom.family((_key: string) =>
+    Atom.make<OrchestrationV2ThreadShell | null>(null),
+  );
   const catalogValueAtom = Atom.make({
     isReady: true,
     entries: new Map(
@@ -52,15 +56,41 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
     registry: AtomRegistry.make(),
     snapshotAtom,
     catalogValueAtom,
+    lookupThreadAtom: (ref: ScopedThreadRef) =>
+      lookupThreadAtom(JSON.stringify([ref.environmentId, ref.threadId])),
     threads: createEnvironmentThreadShellAtoms({
       catalogValueAtom,
       snapshotAtom,
+      lookupThreadAtom: (ref: ScopedThreadRef) =>
+        lookupThreadAtom(JSON.stringify([ref.environmentId, ref.threadId])),
       hiddenThreadTagsAtom: () => Atom.make(null),
     }),
   };
 }
 
 describe("v2 thread shell lists", () => {
+  it("resolves a referenced settled thread without adding it to the loaded thread list", () => {
+    const { registry, threads, lookupThreadAtom } = makeHarness();
+    const settled = {
+      ...v2ThreadShell,
+      id: ThreadId.make("older-settled"),
+      title: "Older settled work",
+      settledOverride: "settled" as const,
+      settledAt: v2Now,
+    };
+    const ref = { environmentId, threadId: settled.id };
+    const target = threads.threadShellAtom(ref);
+    const release = registry.mount(target);
+    expect(registry.get(target)).toBeNull();
+    registry.set(lookupThreadAtom(ref), settled);
+    expect(registry.get(target)?.title).toBe(settled.title);
+    expect(registry.get(threads.threadRefsAtom)).not.toContainEqual(ref);
+    registry.set(lookupThreadAtom(ref), null);
+    expect(registry.get(target)).toBeNull();
+    release();
+    registry.dispose();
+  });
+
   it("preserves ordered reference arrays when a middle thread changes", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const snapshot = {

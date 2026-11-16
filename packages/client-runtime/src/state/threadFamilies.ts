@@ -6,6 +6,7 @@ import {
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ThreadFamily,
   type OrchestrationV2ThreadShell,
+  type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -128,6 +129,24 @@ export function createThreadFamilyAtoms<R, ER, E>(
   });
   const familyKey = (environmentId: EnvironmentId, threadId: ThreadId) =>
     JSON.stringify([environmentId, threadId]);
+
+  const lookupThreadAtom = Atom.family((key: string) =>
+    Atom.make((get): OrchestrationV2ThreadShell | null => {
+      const [environmentId, threadId] = JSON.parse(key) as [EnvironmentId, ThreadId];
+      const state = shellStateValue(get(shellStateAtom(environmentId)));
+      const snapshot = state === null ? null : Option.getOrNull(state.snapshot);
+      if (snapshot === null || state === null) return null;
+      const family = selectEnvironmentQueryData(get(familyAtom(key)));
+      if (
+        family === null ||
+        family.snapshotSequence < (snapshot.olderSettled?.asOfSequence ?? 0) ||
+        (state.removedAt.get(threadId) ?? -1) > family.snapshotSequence
+      ) {
+        return null;
+      }
+      return family.threads.find((thread) => thread.id === threadId) ?? null;
+    }).pipe(Atom.withLabel(`environment-thread-lookup:${key}`)),
+  );
 
   /** Reads the current generation's family again, so a failed read does not last the session. */
   const refresh = (
@@ -252,6 +271,8 @@ export function createThreadFamilyAtoms<R, ER, E>(
     /** The current generation's family read, for decisions that need a settled answer. */
     familyAtom: (environmentId: EnvironmentId, threadId: ThreadId) =>
       familyAtom(familyKey(environmentId, threadId)),
+    lookupThreadAtom: (ref: ScopedThreadRef) =>
+      lookupThreadAtom(familyKey(ref.environmentId, ref.threadId)),
     mount,
     mountRows,
     refresh,

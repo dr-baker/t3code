@@ -1,4 +1,4 @@
-import { environmentThreadDetails } from "./threads";
+import { environmentThreadDetails } from "./threadDetails";
 import { createServerEnvironmentAtoms } from "@t3tools/client-runtime/state/server";
 import {
   createOutdatedServerDescriptionCommand,
