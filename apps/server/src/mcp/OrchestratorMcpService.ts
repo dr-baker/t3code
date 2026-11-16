@@ -1963,10 +1963,7 @@ const make = Effect.gen(function* () {
     const result = {
       taskId: task.id,
       childThreadId: task.childThreadId,
-      link: formatThreadLink(
-        { environmentId: scope.environmentId, threadId: task.childThreadId },
-        childControls.thread.title,
-      ),
+      link: threadLinkFor(scope, task.childThreadId, childControls.thread.title),
       childRunId: childRun?.id ?? null,
       childNodeId: task.id,
       status,
@@ -3400,10 +3397,7 @@ const make = Effect.gen(function* () {
                 );
               return {
                 threadId,
-                link: formatThreadLink(
-                  { environmentId: scope.environmentId, threadId },
-                  projection.thread.title,
-                ),
+                link: threadLinkFor(scope, threadId, projection.thread.title),
                 runId: run?.id ?? null,
                 status: run?.status ?? "idle",
                 title: projection.thread.title,

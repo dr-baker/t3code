@@ -9,6 +9,41 @@ import {
 import * as Effect from "effect/Effect";
 
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { relabelThreadLinks } from "@t3tools/shared/threadLinks";
+
+it("keeps local thread links clickable on mobile before their summaries load", () => {
+  const environmentId = EnvironmentId.make("local");
+  const threadId = ThreadId.make("older-settled");
+  const scope = { environmentId, client: undefined };
+  const link = McpInvocationContext.threadLinkFor(scope, threadId, "Settled work");
+  expect(link).toBe("[Settled work](t3-thread://v1/older-settled)");
+  expect(relabelThreadLinks(link, environmentId, () => undefined)).toBe(link);
+  expect(
+    McpInvocationContext.threadLinkFor(
+      {
+        environmentId,
+        client: { sessionId: "peer", label: "Other machine", access: "auto", linked: true },
+      },
+      threadId,
+      "Settled work",
+    ),
+  ).toBe("<t3-thread://v2/local/older-settled>");
+  expect(
+    McpInvocationContext.threadLinkFor(
+      {
+        environmentId,
+        client: {
+          sessionId: "external",
+          label: "External client",
+          access: "auto",
+          hostedAppUrl: "https://app.example",
+        },
+      },
+      threadId,
+      "Settled work",
+    ),
+  ).toBe("https://app.example/threads/local/older-settled");
+});
 
 it.effect("reports other missing capabilities with the neutral error", () => {
   const invocation: McpInvocationContext.McpInvocationScope = {

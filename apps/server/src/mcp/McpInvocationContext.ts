@@ -169,13 +169,16 @@ export interface McpInvocationScope {
 export const threadLinkFor = (
   scope: Pick<McpInvocationScope, "environmentId" | "client">,
   threadId: ThreadId,
-  title?: string,
+  title: string = threadId,
 ): string => {
   const hostedAppUrl = scope.client?.hostedAppUrl;
-  const ref = { environmentId: scope.environmentId, threadId };
-  return hostedAppUrl === undefined
-    ? formatThreadLink(ref, title)
-    : hostedThreadLink(ref, hostedAppUrl);
+  if (hostedAppUrl !== undefined) {
+    return hostedThreadLink({ environmentId: scope.environmentId, threadId }, hostedAppUrl);
+  }
+  // Installed mobile clients keep labeled v1 links clickable before a thread's shell is loaded.
+  return scope.client === undefined
+    ? formatThreadLink({ environmentId: null, threadId }, title)
+    : formatThreadLink({ environmentId: scope.environmentId, threadId });
 };
 
 export class McpInvocationContext extends Context.Service<
