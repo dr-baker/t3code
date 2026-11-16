@@ -1,6 +1,8 @@
 import { expect, it } from "vite-plus/test";
 import { render } from "../../../test/render";
 import "../../index.css";
+import { applyThemeCss } from "../../themeCss";
+import personalTheme from "../../../../../personal/theme.json";
 import { SidebarThreadCardLayout } from "./SidebarThreadCardLayout";
 
 function row(compact: boolean) {
@@ -18,11 +20,13 @@ function row(compact: boolean) {
 }
 
 it("removes the metadata line and its height, and restores it when expanded", async () => {
+  using _theme = { [Symbol.dispose]: () => applyThemeCss(undefined) };
+  applyThemeCss(personalTheme.css);
   await using screen = await render(row(false));
   const expandedHeight = screen.container.firstElementChild!.getBoundingClientRect().height;
   await expect.element(screen.getByText("feature/sidebar")).toBeVisible();
   await screen.rerender(row(true));
-  await expect.element(screen.getByText("feature/sidebar")).not.toBeInTheDocument();
+  await expect.element(screen.getByText("feature/sidebar")).not.toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Settle" })).toBeVisible();
   const project = screen.getByText("SettingsUI").element().getBoundingClientRect();
   const claude = screen.getByText("Claude").element().getBoundingClientRect();

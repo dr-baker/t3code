@@ -366,7 +366,7 @@ function SidebarThreadTooltipContent({
         <div className="flex min-w-0 items-center gap-2">
           <ClockIcon aria-hidden className="size-3 shrink-0 stroke-muted-foreground" />
           <span className="tabular-nums">
-            <RelativeTimeLabel timestamp={threadTimeTimestamp(thread)} />
+            <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
           </span>
         </div>
       ) : null}
@@ -1229,6 +1229,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const projectIcon =
     props.project || props.isPinned ? (
       <span
+        data-sidebar-project-icon
         data-sidebar-pinned-icon={props.inPinnedSection ? threadKey : undefined}
         className="inline-flex size-4 shrink-0"
       >
@@ -1463,85 +1464,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     </span>
   ) : null;
 
-  if (variant === "single-line") {
-    return (
-      <li
-        data-thread-item={threadKey}
-        {...sortableRootProps}
-        {...(fileDropHandlers ?? {})}
-        className={cn(
-          "list-none [content-visibility:auto] [contain-intrinsic-size:auto_36px]",
-          sortable?.isDragging && "relative z-20",
-        )}
-      >
-        <Tooltip disabled={snoozeMenuOpen || sortable?.isDragging}>
-          <TooltipTrigger
-            render={
-              <div
-                ref={rowRef}
-                role="treeitem"
-                tabIndex={-1}
-                data-sidebar-row={threadKey}
-                data-sidebar-parent={props.navigationParent}
-                aria-label={accessibility.label}
-                aria-current={accessibility.current}
-                data-testid="sidebar-row-single-line"
-                aria-busy={isRegeneratingTitle || undefined}
-                className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2 px-2.5")}
-                onClick={handleClick}
-                onDoubleClick={handleDoubleClick}
-                onKeyDown={handleKeyDown}
-                onContextMenu={handleContextMenu}
-              />
-            }
-          >
-            {accessibleTitle}
-            {projectIcon}
-            {title}
-            {sortable?.isDragging || props.sweepAction !== null ? (
-              dragDestination
-            ) : (
-              <span
-                className={cn(
-                  "pointer-events-none absolute right-2.5 flex h-6 shrink-0 items-center gap-2 opacity-0 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:static group-any-hover/sidebar-row:opacity-100 group-focus-visible/sidebar-row:pointer-events-auto group-focus-visible/sidebar-row:static group-focus-visible/sidebar-row:opacity-100 group-has-[:focus-visible]/sidebar-row:pointer-events-auto group-has-[:focus-visible]/sidebar-row:static group-has-[:focus-visible]/sidebar-row:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:static pointer-coarse:opacity-100",
-                  snoozeMenuOpen && "pointer-events-auto static opacity-100",
-                )}
-              >
-                <span className="text-xs text-secondary-label tabular-nums">
-                  <RelativeTimeLabel timestamp={threadTimeTimestamp(thread)} />
-                </span>
-                {pinIndicator}
-                {!props.isPinned && showSnoozeButton ? (
-                  <SnoozeMenuButton
-                    open={snoozeMenuOpen}
-                    onOpenChange={setSnoozeMenuOpen}
-                    onSnooze={handleSnoozePreset}
-                    timestampFormat={props.timestampFormat}
-                    environmentId={thread.environmentId}
-                  />
-                ) : null}
-                {!props.isPinned && props.settlementSupported && canOperateThread ? (
-                  <button
-                    type="button"
-                    aria-label="Settle thread"
-                    onClick={handleSettleClick}
-                    onPointerDown={handleActionPointerDown}
-                    className="inline-flex size-6 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                  >
-                    <CheckIcon aria-hidden className="size-3.5" />
-                  </button>
-                ) : null}
-              </span>
-            )}
-            {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
-          </TooltipTrigger>
-          {detailsTooltip}
-        </Tooltip>
-      </li>
-    );
-  }
-
-  if (variant !== "card") {
+  if (variant !== "card" && variant !== "single-line") {
     const multiline = variant === "folder-multiline";
     const inFolder = variant === "folder" || multiline;
     return (
@@ -1785,10 +1708,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         >
           <SidebarThreadCardLayout
             compact={compactCards}
+            singleLine={variant === "single-line"}
             metadataEmpty={metaLineEmpty}
             metadata={metaLine}
           >
-            <div className="flex h-5 min-w-0 items-center gap-1.5">
+            <div data-sidebar-card-header className="flex h-5 min-w-0 items-center gap-1.5">
               {draftIndicator}
               {projectIcon}
               {/* Left of the status slot, the pin would slide when hover swaps the
@@ -1796,10 +1720,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {pinIndicator}
               {props.projectDisplayName ? (
                 <span
-                  className={cn(
-                    "min-w-0 truncate font-normal text-secondary-label text-xs",
-                    !compactCards && "flex-1",
-                  )}
+                  data-sidebar-project-name
+                  className="min-w-0 flex-1 truncate font-normal text-secondary-label text-xs"
                 >
                   {props.projectDisplayName}
                 </span>
@@ -1961,7 +1883,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               )}
               {props.sweepAction !== null ? dragDestination : null}
             </div>
-            <div className="mt-1 flex min-w-0 items-center gap-1.5">
+            <div data-sidebar-card-title className="mt-1 flex min-w-0 items-center gap-1.5">
               {title}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">

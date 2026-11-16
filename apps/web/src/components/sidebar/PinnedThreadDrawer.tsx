@@ -70,6 +70,7 @@ export function PinnedThreadDrawer(props: {
         <div
           role="group"
           aria-label="Pinned threads"
+          data-sidebar-pinned-icons
           className={cn("flex h-11 items-center gap-1 px-1", !props.dragging && "overflow-hidden")}
         >
           <SortableContext
@@ -167,6 +168,7 @@ function PinnedThreadIconButton({
           <button
             type="button"
             {...buttonProps}
+            data-sidebar-pin-button
             aria-label={thread.ghost ? `${thread.title}, in Active` : thread.title}
             aria-current={thread.active && !thread.ghost ? "page" : undefined}
             onClick={(event) => onClick(event, thread.key)}

@@ -1,0 +1,50 @@
+[data-sidebar-card-layout="compact"] {
+  height: 3.75rem !important;
+}
+[data-sidebar-card-layout="compact"] [data-sidebar-card-metadata],
+[data-sidebar-card-layout="single-line"] [data-sidebar-card-metadata] {
+  display: none;
+}
+[data-sidebar-card-layout="compact"] [data-sidebar-project-name] {
+  flex: 0 1 auto;
+}
+[data-sidebar-card-layout="single-line"] {
+  display: flex;
+  height: 2rem !important;
+  align-items: center;
+  gap: 0.5rem;
+  padding-block: 0;
+}
+[data-sidebar-card-layout="single-line"] [data-sidebar-card-header] {
+  display: contents;
+}
+[data-sidebar-card-layout="single-line"]
+  [data-sidebar-card-header]
+  > :not([data-sidebar-project-icon]) {
+  display: none;
+}
+[data-sidebar-card-layout="single-line"] [data-sidebar-card-title] {
+  flex: 1;
+  margin-top: 0;
+}
+[data-sidebar-pinned-icons] {
+  gap: 0.25rem;
+  padding-inline: 0.25rem;
+}
+[data-sidebar-pin-button] {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.375rem;
+}
+.dark [data-slot="composer-shell"] {
+  --chat-composer-highlight: color-mix(in srgb, #432d48 12%, transparent);
+  --chat-composer-outline: #241e28;
+}
+[data-slot="composer-context-strip"] {
+  --background-image-composer-seam-below: linear-gradient(
+    to bottom,
+    transparent 0 1rem,
+    rgb(0 0 0 / 18%) 1rem,
+    transparent calc(1rem + 10px)
+  );
+}
