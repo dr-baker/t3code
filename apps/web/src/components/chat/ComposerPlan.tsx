@@ -42,7 +42,7 @@ function PlanDetails({
         aria-expanded={expanded}
         aria-controls={detailsId}
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-2.5 rounded-t-xl px-3 py-2.5 text-left hover:bg-accent/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left hover:bg-accent/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
       >
         {complete ? (
           <CheckIcon aria-hidden className="size-4 shrink-0 text-success" />
