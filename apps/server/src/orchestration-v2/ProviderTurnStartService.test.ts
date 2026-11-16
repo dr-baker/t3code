@@ -2,6 +2,7 @@ import {
   serializeAssistantCitation,
   expandAssistantCitationsForProvider,
 } from "@t3tools/shared/assistantCitations";
+import * as RunUpdateErrors from "./RunUpdateErrors.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it, vi } from "vite-plus/test";
@@ -1767,6 +1768,7 @@ effectIt.effect("preserves a replacement committed before exhausted start settle
       ),
     );
     const executionLayer = RunExecutionService.layer.pipe(
+      Layer.provide(RunUpdateErrors.layer),
       Layer.provide(
         Layer.mergeAll(
           McpAppModelContext.layerEmpty,

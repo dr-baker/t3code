@@ -112,6 +112,7 @@ const CLIENT_SHELL_OPT_INS = {
   omitOlderSettled: "1",
 } satisfies Required<Omit<typeof EnvironmentOrchestrationShellSnapshotQuery.Type, "resumeFrom">>;
 const CLIENT_THREAD_SUBSCRIPTION = {
+  includeUpdateErrors: true,
   requestCompletionMarker: true,
   acceptBoundedSnapshot: true,
   acceptDeferredWork: true,
@@ -121,6 +122,7 @@ const CLIENT_THREAD_SUBSCRIPTION = {
 } satisfies Required<Omit<OrchestrationV2SubscribeThreadInput, "threadId" | "afterSequence">>;
 type ShellResumeField = "afterSequence" | "httpSnapshotFallback" | "knownProjectIdentities";
 const CLIENT_SHELL_SUBSCRIPTION = {
+  includeUpdateErrors: true,
   requestCompletionMarker: true,
   omitIdleSubagents: true,
   omitOlderSettled: true,

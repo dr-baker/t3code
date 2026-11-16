@@ -138,7 +138,10 @@ export function applyShellStreamEvent(
     const apply = (threads: OrchestrationV2ShellSnapshot["threads"]) =>
       threads.map((thread) => {
         const updateError = errors.get(thread.id);
-        return thread.updateError === updateError ? thread : { ...thread, updateError };
+        if (thread.updateError === updateError) return thread;
+        if (updateError !== undefined) return { ...thread, updateError };
+        const { updateError: _previousError, ...cleared } = thread;
+        return cleared;
       });
     return {
       ...snapshot,
@@ -235,7 +238,7 @@ function batchRows<T extends { readonly id: unknown }>(rows: ReadonlyArray<T>) {
 
 export type ShellStreamEvent = Extract<
   OrchestrationV2ShellStreamItem,
-  { readonly sequence: number }
+  { readonly sequence: number } | { readonly kind: "update-errors" }
 >;
 
 /** Apply ordered deltas with one index and at most one new array per collection. */

@@ -1,4 +1,4 @@
-import type { ThreadStructureRuntime } from "@t3tools/client-runtime/state/shell";
+import type { ThreadStructure, ThreadStructureRuntime } from "@t3tools/client-runtime/state/shell";
 import { msg } from "gt-react";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import {
