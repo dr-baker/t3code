@@ -561,6 +561,9 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarPinnedPlacement: Schema.Literals(["top", "bottom"]).pipe(
     Schema.withDecodingDefault(Effect.succeed("bottom")),
   ),
+  sidebarPinnedMaxRows: Schema.Literals([1, 2, 3, 4, 5, 6]).pipe(
+    Schema.withDecodingDefault(Effect.succeed(2)),
+  ),
   sidebarPinnedPopOutWhenReady: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
@@ -1212,6 +1215,7 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "pullRequestMergeMethod",
   "sidebarAutoSettleOnMerge",
   "sidebarAutoSettleAfterDays",
+  "sidebarAutoSnoozePreset",
   "sidebarAutoSettleKeepPullRequests",
   "continueThreadsAfterServerUpdate",
   "responseStreamingMode",
@@ -1248,6 +1252,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   branchNamePrefix: Schema.optionalKey(TrimmedString),
   branchNameInstructions: Schema.optionalKey(TrimmedString),
   pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
+  sidebarAutoSnoozePreset: Schema.optionalKey(Schema.String),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleKeepPullRequests: Schema.optionalKey(Schema.Boolean),
@@ -1483,6 +1488,9 @@ export const ServerSettings = Schema.Struct({
   idleCompaction: Schema.optionalKey(IdleCompactionMode),
   snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  sidebarAutoSnoozePreset: Schema.String.pipe(
+    Schema.withDecodingDefault(Effect.succeed("longest")),
+  ),
   snoozePresets: SnoozePresetSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNOOZE_PRESETS)),
   ),
@@ -1937,6 +1945,7 @@ export const ServerSettingsPatch = Schema.Struct({
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
+  sidebarAutoSnoozePreset: Schema.optionalKey(Schema.String),
   snoozePresets: Schema.optionalKey(SnoozePresetSettings),
   hiddenThreadTags: Schema.optionalKey(Schema.Array(Schema.String)),
   hideTaggedThreads: Schema.optionalKey(Schema.Boolean),
@@ -2137,6 +2146,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarSingleLineThreads: Schema.optionalKey(Schema.Boolean),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarPinnedPlacement: Schema.optionalKey(Schema.Literals(["top", "bottom"])),
+  sidebarPinnedMaxRows: Schema.optionalKey(Schema.Literals([1, 2, 3, 4, 5, 6])),
   sidebarPinnedPopOutWhenReady: Schema.optionalKey(Schema.Boolean),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

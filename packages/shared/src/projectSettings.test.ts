@@ -60,12 +60,20 @@ describe("resolveProjectSettings", () => {
       defaultAutoPull: true,
       sidebarAutoSettleAfterDays: 3,
       projectSettingsOverrides: {
-        [projectId]: { defaultAutoPull: false, sidebarAutoSettleAfterDays: null },
+        [projectId]: {
+          defaultAutoPull: false,
+          sidebarAutoSettleAfterDays: null,
+          sidebarAutoSnoozePreset: "settle",
+        },
       },
     });
     const resolved = resolveProjectSettings(settings, projectId);
     expect(resolved.settings.defaultAutoPull).toBe(false);
     expect(resolved.settings.sidebarAutoSettleAfterDays).toBeNull();
+    expect(resolved.settings.sidebarAutoSnoozePreset).toBe("settle");
+    expect(resolveProjectSettings(settings, otherProjectId).settings.sidebarAutoSnoozePreset).toBe(
+      "longest",
+    );
     expect(resolved.settings.defaultThreadEnvMode).toBe(settings.defaultThreadEnvMode);
     expect(resolved.sources.defaultAutoPull).toBe("project");
     expect(resolved.sources.sidebarAutoSettleAfterDays).toBe("project");

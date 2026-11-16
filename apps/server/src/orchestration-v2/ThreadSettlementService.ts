@@ -1,3 +1,4 @@
+import { resolveAutoSnoozeUntil } from "@t3tools/shared/snoozePresets";
 import {
   backgroundWorkHoldsCompletion,
   isPullRequestWatchTask,
@@ -210,14 +211,14 @@ export function isSnoozed(
   return !wokeOnError;
 }
 
-export function resolveAutoSettlementAt(input: {
+function resolveAutoSettlement(input: {
   readonly thread: ProjectionStore.ProjectionSettlementCandidate;
   readonly pullRequest: SettlementPullRequest | null;
   readonly nowMs: number;
   readonly autoSettleAfterDays: number | null;
   readonly autoSettleOnMerge: boolean;
   readonly autoSettleKeepPullRequests?: boolean;
-}): DateTime.Utc | null {
+}): { readonly kind: "pull-request" | "inactivity"; readonly settledAt: DateTime.Utc } | null {
   const { thread } = input;
   let pullRequest = input.pullRequest;
   const links = settlementPullRequestLinks(thread.pullRequests ?? []);
@@ -242,8 +243,22 @@ export function resolveAutoSettlementAt(input: {
   }
   if (!isAutoSettlementCandidate(thread, input.nowMs)) return null;
   const activityAtMs = threadActivityAtMs(thread);
-  if (pullRequest !== null && pullRequestSettles(thread, pullRequest, input.autoSettleOnMerge)) {
-    return DateTime.makeUnsafe(activityAtMs);
+  const snoozedUntilMs = toMillis(thread.snoozedUntil);
+  const timerWakeAtMs =
+    snoozedUntilMs !== null && snoozedUntilMs <= input.nowMs ? snoozedUntilMs : null;
+  const lastWakeAtMs = latestMillis([toMillis(thread.lastSnoozeWakeAt), timerWakeAtMs]);
+  const pullRequestAtMs =
+    pullRequest === null
+      ? NaN
+      : Date.parse(
+          (pullRequest.state === "merged" ? pullRequest.mergedAt : pullRequest.closedAt) ?? "",
+        );
+  if (
+    pullRequest !== null &&
+    pullRequestSettles(thread, pullRequest, input.autoSettleOnMerge) &&
+    (lastWakeAtMs === null || pullRequestAtMs > lastWakeAtMs)
+  ) {
+    return { kind: "pull-request", settledAt: DateTime.makeUnsafe(activityAtMs) };
   }
   const hasPullRequest =
     hasOpenLink ||
@@ -252,14 +267,16 @@ export function resolveAutoSettlementAt(input: {
     thread.branchPullRequest != null;
   if (input.autoSettleKeepPullRequests === true && hasPullRequest) return null;
   if (input.autoSettleAfterDays === null) return null;
-  const snoozedUntilMs = toMillis(thread.snoozedUntil);
-  const timerWakeAtMs =
-    snoozedUntilMs !== null && snoozedUntilMs <= input.nowMs ? snoozedUntilMs : null;
-  const inactivityAtMs =
-    latestMillis([activityAtMs, toMillis(thread.lastSnoozeWakeAt), timerWakeAtMs]) ?? activityAtMs;
+  const inactivityAtMs = latestMillis([activityAtMs, lastWakeAtMs]) ?? activityAtMs;
   return inactivityAtMs < input.nowMs - input.autoSettleAfterDays * DAY_MS
-    ? DateTime.makeUnsafe(inactivityAtMs)
+    ? { kind: "inactivity", settledAt: DateTime.makeUnsafe(inactivityAtMs) }
     : null;
+}
+
+export function resolveAutoSettlementAt(
+  input: Parameters<typeof resolveAutoSettlement>[0],
+): DateTime.Utc | null {
+  return resolveAutoSettlement(input)?.settledAt ?? null;
 }
 
 export class ThreadSettlementServiceV2 extends Context.Service<
@@ -289,12 +306,15 @@ export function autoSettlementSettingsKey(
     settings.sidebarAutoSettleOnMerge,
     settings.sidebarAutoSettleAfterDays,
     settings.sidebarAutoSettleKeepPullRequests,
+    settings.sidebarAutoSnoozePreset,
+    settings.snoozePresets,
     Object.entries(settings.projectSettingsOverrides)
       .filter(
         ([, entry]) =>
           entry.sidebarAutoSettleOnMerge !== undefined ||
           entry.sidebarAutoSettleAfterDays !== undefined ||
-          entry.sidebarAutoSettleKeepPullRequests !== undefined,
+          entry.sidebarAutoSettleKeepPullRequests !== undefined ||
+          entry.sidebarAutoSnoozePreset !== undefined,
       )
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([projectId, entry]) => [
@@ -304,6 +324,7 @@ export function autoSettlementSettingsKey(
           ? "inherit"
           : entry.sidebarAutoSettleAfterDays,
         entry.sidebarAutoSettleKeepPullRequests ?? "inherit",
+        entry.sidebarAutoSnoozePreset ?? "inherit",
       ]),
   ]);
 }
@@ -388,7 +409,7 @@ export const make = Effect.gen(function* () {
           thread.projectId,
         ).settings;
         const decisionNow = yield* DateTime.now;
-        const settledAt = resolveAutoSettlementAt({
+        const decision = resolveAutoSettlement({
           thread,
           pullRequest,
           nowMs: DateTime.toEpochMillis(decisionNow),
@@ -396,16 +417,25 @@ export const make = Effect.gen(function* () {
           autoSettleOnMerge: currentSettings.sidebarAutoSettleOnMerge,
           autoSettleKeepPullRequests: currentSettings.sidebarAutoSettleKeepPullRequests,
         });
-        if (settledAt === null) return thread;
+        if (decision === null) return thread;
         // A terminal still running a program keeps its thread open; a later sweep settles it.
         if (yield* terminals.hasActiveSubprocess({ threadId: thread.id })) return null;
+        const snoozedUntil =
+          decision.kind === "inactivity"
+            ? resolveAutoSnoozeUntil(
+                currentSettings.snoozePresets,
+                currentSettings.sidebarAutoSnoozePreset,
+                DateTime.toDate(decisionNow),
+              )
+            : undefined;
         const uuid = yield* random.uuidV4();
         yield* orchestrator.dispatch({
           type: "thread.auto-settle",
           commandId: CommandId.make(`server:auto-settle:${thread.id}:${uuid}`),
           threadId: thread.id,
           snapshotAt: thread.updatedAt,
-          settledAt,
+          settledAt: decision.settledAt,
+          ...(snoozedUntil === undefined ? {} : { snoozedUntil }),
         });
         return null;
       },
@@ -428,7 +458,7 @@ export const make = Effect.gen(function* () {
         if (thread.lineage.relationshipToParent === "subagent") return settleThread(thread, null);
         const projectSettings = resolveProjectSettings(settings, thread.projectId).settings;
         // Skip no-op decisions; actual settlement still reads fresh settings before dispatch.
-        const settledAt = resolveAutoSettlementAt({
+        const decision = resolveAutoSettlement({
           thread,
           pullRequest: null,
           nowMs,
@@ -436,7 +466,16 @@ export const make = Effect.gen(function* () {
           autoSettleOnMerge: projectSettings.sidebarAutoSettleOnMerge,
           autoSettleKeepPullRequests: projectSettings.sidebarAutoSettleKeepPullRequests,
         });
-        return settledAt === null ? Effect.succeed(thread) : settleThread(thread, null);
+        const needsPullRequestLookup =
+          decision?.kind === "inactivity" &&
+          projectSettings.sidebarAutoSnoozePreset !== "settle" &&
+          visibleThreadPullRequests(thread.pullRequests ?? []).length === 0 &&
+          (thread.branch !== null ||
+            thread.linkedPullRequest != null ||
+            thread.branchPullRequest != null);
+        return decision === null || needsPullRequestLookup
+          ? Effect.succeed(thread)
+          : settleThread(thread, null);
       },
       { concurrency: 8 },
     ))

@@ -17,6 +17,13 @@ describe("pinned drawer preview", () => {
 
   it("reserves space for the drawer button when threads overflow", () => {
     const preview = pinnedDrawerPreview(threads, 115);
+    expect(pinnedDrawerPreview(threads, 115, 2)).toEqual({ visible: threads, hiddenCount: 0 });
+    const many = Array.from({ length: 7 }, (_, key) => ({ key }));
+    expect(pinnedDrawerPreview(many, 116, 2)).toEqual({
+      visible: many.slice(0, 5),
+      hiddenCount: 2,
+    });
+    expect(pinnedDrawerPreview(many.slice(0, 6), 116, 2).hiddenCount).toBe(0);
     expect(preview.visible.map((thread) => thread.key)).toEqual(["oldest"]);
     expect(preview.hiddenCount).toBe(2);
   });

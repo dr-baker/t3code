@@ -375,6 +375,18 @@ describe("resolveAutoSettlementAt", () => {
     };
     expect(ThreadSettlementService.resolveAutoSettlementAt(input)).toEqual(at(-90 * 60 * 1_000));
     expect(
+      ThreadSettlementService.resolveAutoSettlementAt({
+        ...input,
+        thread: { ...thread, snoozedUntil: at(-1_000), snoozedAt: at(-2_000) },
+      }),
+    ).toBeNull();
+    expect(
+      ThreadSettlementService.resolveAutoSettlementAt({
+        ...input,
+        thread: { ...thread, lastSnoozeWakeAt: at(-1_000) },
+      }),
+    ).toBeNull();
+    expect(
       ThreadSettlementService.resolveAutoSettlementAt({ ...input, autoSettleOnMerge: false }),
     ).toBeNull();
     expect(
@@ -937,6 +949,7 @@ describe("ThreadSettlementServiceV2 worker", () => {
         expect((yield* Ref.get(fixture.commands)).map((command) => command.threadId)).toEqual([
           thread.id,
         ]);
+        assert.property((yield* Ref.get(fixture.commands))[0], "snoozedUntil");
       }).pipe(Effect.provide(fixture.layer));
     }),
   );
@@ -1121,6 +1134,7 @@ describe("ThreadSettlementServiceV2 worker", () => {
           ]);
           expect(yield* Ref.get(fixture.branchCalls)).toEqual([]);
           expect(yield* Ref.get(fixture.summaryCalls)).toEqual([]);
+          assert.notProperty((yield* Ref.get(fixture.commands))[0], "snoozedUntil");
         }).pipe(Effect.provide(fixture.layer));
       }).pipe(Effect.provide(projectionStoreSql)),
   );
@@ -1200,6 +1214,7 @@ describe("ThreadSettlementServiceV2 worker", () => {
           ]);
           expect(yield* Ref.get(fixture.branchCalls)).toEqual([]);
           expect(yield* Ref.get(fixture.summaryCalls)).toEqual([]);
+          assert.notProperty((yield* Ref.get(fixture.commands))[0], "snoozedUntil");
         }).pipe(Effect.provide(fixture.layer));
       }).pipe(Effect.provide(projectionStoreSql)),
   );

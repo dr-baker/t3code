@@ -11,6 +11,10 @@
       "types": "./src/pullRequestAnchor.ts",
       "import": "./src/pullRequestAnchor.ts"
     },
+    "./snoozePresets": {
+      "types": "./src/snoozePresets.ts",
+      "import": "./src/snoozePresets.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"

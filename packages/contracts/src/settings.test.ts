@@ -587,6 +587,16 @@ describe("ClientSettings pinned drawer", () => {
   it("preserves bottom placement and automatic pop-outs as defaults", () => {
     const settings = decodeClientSettings({});
     expect(settings.sidebarPinnedPlacement).toBe("bottom");
+    expect(settings.sidebarPinnedMaxRows).toBe(2);
+    for (const rows of [1, 2, 3, 4, 5, 6]) {
+      const patch = decodeClientSettingsPatch({ sidebarPinnedMaxRows: rows });
+      expect(decodeClientSettings(JSON.parse(JSON.stringify(patch))).sidebarPinnedMaxRows).toBe(
+        rows,
+      );
+    }
+    for (const rows of [0, 7, 1.5, "2"]) {
+      expect(() => decodeClientSettingsPatch({ sidebarPinnedMaxRows: rows })).toThrow();
+    }
     expect(settings.sidebarPinnedPopOutWhenReady).toBe(true);
     expect(decodeClientSettingsPatch({})).not.toHaveProperty("sidebarPinnedPlacement");
     expect(decodeClientSettingsPatch({})).not.toHaveProperty("sidebarPinnedPopOutWhenReady");

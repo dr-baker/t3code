@@ -3292,6 +3292,7 @@ it.effect("rejects automatic settlement of pins even with a current snapshot", (
       .dispatch({
         type: "thread.auto-settle",
         commandId: CommandId.make("auto-settle-pinned-work"),
+        snoozedUntil: "2099-01-01T00:00:00.000Z",
         threadId,
         snapshotAt: pinned.updatedAt,
       })
@@ -3308,9 +3309,14 @@ it.effect("rejects automatic settlement of pins even with a current snapshot", (
     yield* orchestrator.dispatch({
       type: "thread.auto-settle",
       commandId: CommandId.make("auto-settle-unpinned-work"),
+      snoozedUntil: "2099-01-01T00:00:00.000Z",
       threadId,
       snapshotAt: (yield* projections.getThread(threadId)).updatedAt,
     });
-    assert.equal((yield* projections.getThreadShell(threadId))?.settledOverride, "settled");
+    assert.deepEqual(
+      (yield* projections.getThreadShell(threadId))?.snoozedUntil,
+      DateTime.makeUnsafe("2099-01-01T00:00:00.000Z"),
+    );
+    assert.isNull((yield* projections.getThreadShell(threadId))?.settledOverride);
   }).pipe(Effect.provide(layerTest)),
 );

@@ -8,7 +8,6 @@ import { PinnedThreadDrawer } from "./sidebar/PinnedThreadDrawer";
 import { PinnedThreadActivity } from "./sidebar/PinnedThreadActivity";
 import { pinnedThreadNeedsAttention } from "./sidebar/PinnedThreadActivity.logic";
 import { createPinnedDrawerMotion } from "./sidebar/PinnedThreadDrawer.motion";
-import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
   dropThreadContext,
   endThreadContextDrag,
@@ -475,6 +474,7 @@ function useSidebarThreads(input: {
   // Folders already separate the work, so boring mode has no Working shelf.
   const workingShelfEnabled =
     useClientSettings((s) => s.sidebarWorkingShelfEnabled) && folderGroups === null;
+  const pinnedMaxRows = useClientSettings((s) => s.sidebarPinnedMaxRows);
   const pinnedPlacement = useClientSettings((s) => s.sidebarPinnedPlacement);
   const pinnedPopOutWhenReady = useClientSettings((s) => s.sidebarPinnedPopOutWhenReady);
   const inboxReturnsVersion = useSyncExternalStore(
@@ -607,6 +607,7 @@ function useSidebarThreads(input: {
   return {
     ...partition,
     pinnedDrawerThreads,
+    pinnedMaxRows,
     pinnedPlacement,
     threads,
     workingShelfEnabled,
@@ -1389,6 +1390,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     workingShelfEnabled,
     pinnedThreads,
     pinnedDrawerThreads,
+    pinnedMaxRows,
     pinnedPlacement,
     draggableThreadKeys,
     attentionPinnedKeys,
@@ -3768,6 +3770,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   )}
                                 >
                                   <PinnedThreadDrawer
+                                    maxRows={pinnedMaxRows}
                                     threads={pinnedDrawerThreads.map((thread) => {
                                       const key = threadShellKey(thread);
                                       const project = projectByKey.get(

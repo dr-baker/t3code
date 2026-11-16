@@ -203,9 +203,18 @@ settle every thread in that section between it and the one you release on.
 The **Un-settle** and **Wake** buttons work the same way in their sections.
 Press `Escape` while dragging to cancel.
 
-By default, environments settle inactive threads after seven days and settle
-threads whose pull request merged. A closed pull request can also settle an idle
-thread. An empty thread's inactivity counts from when it was created.
+By default, environments snooze inactive threads after seven days and settle
+threads whose pull request merged or closed. In **Settings → Threads → Automatic
+thread organization**, choose **Snooze**, **Settle**, or **Off** for inactive
+threads and set **Days of inactivity**. The separate **Settle when a PR merges**
+rule always settles threads, regardless of the inactivity action.
+
+When snoozing, **Automatic snooze duration** controls how long the thread stays
+hidden after the inactivity delay. **Longest available** uses the latest wake time
+from your snooze options. A removed or expired choice falls back to the longest;
+with none available, the thread snoozes for one week. Calendar options use the
+environment's local time zone. Empty threads count inactivity from creation.
+
 Work in progress, pending questions or approvals, and background work the agent
 is waiting on prevent automatic settlement. An open pull request does not prevent inactivity
 settlement unless you turn on **Keep threads with a PR** in **Settings → Threads**,

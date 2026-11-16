@@ -15773,12 +15773,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           });
         }
         yield* dispatchThreadMutation(
-          {
-            type: "thread.settle",
-            commandId: command.commandId,
-            threadId: command.threadId,
-            ...(command.settledAt === undefined ? {} : { settledAt: command.settledAt }),
-          },
+          command.snoozedUntil !== undefined
+            ? {
+                type: "thread.snooze",
+                commandId: command.commandId,
+                threadId: command.threadId,
+                snoozedUntil: command.snoozedUntil,
+              }
+            : {
+                type: "thread.settle",
+                commandId: command.commandId,
+                threadId: command.threadId,
+                ...(command.settledAt === undefined ? {} : { settledAt: command.settledAt }),
+              },
           events,
           effects,
         );

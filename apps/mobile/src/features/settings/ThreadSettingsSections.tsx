@@ -1,4 +1,7 @@
 import { T, useGT } from "gt-react-native";
+import { autoSnoozeOptions } from "@t3tools/shared/snoozePresets";
+import { Menu } from "../../components/ui/Menu";
+import { Pressable } from "react-native";
 import { Button } from "../../components/ui/Button";
 import {
   AuthSettingsWriteScope,
@@ -108,6 +111,7 @@ export function AutoSettleSettingsRows(props: {
     patch: Partial<AutoSettleSettings> & {
       autoResumeLimitedThreads?: boolean;
       snoozeLimitedThreads?: boolean;
+      sidebarAutoSnoozePreset?: string;
     },
   ) => props.write(patch);
 
@@ -129,6 +133,13 @@ export function AutoSettleSettingsRows(props: {
   const disabledFor = (...keys: string[]) =>
     disabled || managedSettingReason(displayTargets, keys) !== undefined;
   const afterDays = referenceSettings.sidebarAutoSettleAfterDays;
+  const snoozeOptions = autoSnoozeOptions(referenceSettings.snoozePresets);
+  const automaticAction =
+    afterDays === null
+      ? "off"
+      : referenceSettings.sidebarAutoSnoozePreset === "settle"
+        ? "settle"
+        : "snooze";
 
   return (
     <View className="gap-6">
@@ -156,23 +167,64 @@ export function AutoSettleSettingsRows(props: {
           />
         </SettingsSection>
       ) : null}
-      <SettingsSection title={gt("Auto-settle")}>
-        <SettingsSwitchRow
-          icon="arrow.triangle.branch"
-          label={gt("Auto-settle merged threads")}
-          value={referenceSettings.sidebarAutoSettleOnMerge}
-          disabled={disabledFor("sidebarAutoSettleOnMerge")}
-          onValueChange={(value) => writeToAll({ sidebarAutoSettleOnMerge: value })}
-        />
-        <SettingsSwitchRow
-          icon="clock"
-          label={gt("Auto-settle inactive threads")}
-          value={afterDays !== null}
-          disabled={disabledFor("sidebarAutoSettleAfterDays")}
-          onValueChange={(value) =>
-            writeToAll({ sidebarAutoSettleAfterDays: value ? AUTO_SETTLE_DEFAULT_DAYS : null })
-          }
-        />
+      <SettingsSection title="Automatic thread organization">
+        <Menu
+          actions={[
+            {
+              id: "off",
+              title: "Off",
+              state: automaticAction === "off" ? "on" : "off",
+              attributes: {
+                disabled: disabledFor("sidebarAutoSnoozePreset", "sidebarAutoSettleAfterDays"),
+              },
+            },
+            {
+              id: "snooze",
+              title: "Snooze",
+              state: automaticAction === "snooze" ? "on" : "off",
+              attributes: {
+                disabled: disabledFor("sidebarAutoSnoozePreset", "sidebarAutoSettleAfterDays"),
+              },
+            },
+            {
+              id: "settle",
+              title: "Settle",
+              state: automaticAction === "settle" ? "on" : "off",
+              attributes: {
+                disabled: disabledFor("sidebarAutoSnoozePreset", "sidebarAutoSettleAfterDays"),
+              },
+            },
+          ]}
+          onPressAction={({ nativeEvent }) => {
+            if (nativeEvent.event === "off") writeToAll({ sidebarAutoSettleAfterDays: null });
+            else if (nativeEvent.event === "snooze" || nativeEvent.event === "settle")
+              writeToAll({
+                sidebarAutoSettleAfterDays: afterDays ?? AUTO_SETTLE_DEFAULT_DAYS,
+                sidebarAutoSnoozePreset:
+                  nativeEvent.event === "settle"
+                    ? "settle"
+                    : referenceSettings.sidebarAutoSnoozePreset === "settle"
+                      ? "longest"
+                      : referenceSettings.sidebarAutoSnoozePreset,
+              });
+          }}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Action for inactive threads"
+            disabled={disabledFor("sidebarAutoSnoozePreset", "sidebarAutoSettleAfterDays")}
+            className="flex-row items-center justify-between gap-4 px-4 py-4"
+          >
+            <Text className="text-base text-foreground">Action for inactive threads</Text>
+            <Text className="text-sm text-foreground-muted">
+              {automaticAction === "off"
+                ? "Off"
+                : automaticAction === "settle"
+                  ? "Settle"
+                  : "Snooze"}
+            </Text>
+          </Pressable>
+        </Menu>
         {afterDays !== null ? (
           <View className="flex-row items-center gap-4 px-4 py-4 android:min-h-14 android:py-3">
             <View className="w-[22px] android:w-6" />
@@ -186,18 +238,52 @@ export function AutoSettleSettingsRows(props: {
             />
           </View>
         ) : null}
+        {automaticAction === "snooze" ? (
+          <Menu
+            actions={snoozeOptions.map((option) => ({
+              id: option.value,
+              title: option.label,
+              state: option.value === referenceSettings.sidebarAutoSnoozePreset ? "on" : "off",
+              attributes: {
+                disabled: disabledFor("sidebarAutoSnoozePreset", "sidebarAutoSettleAfterDays"),
+              },
+            }))}
+            onPressAction={({ nativeEvent }) =>
+              writeToAll({ sidebarAutoSnoozePreset: nativeEvent.event })
+            }
+          >
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Automatic snooze duration"
+              disabled={disabledFor("sidebarAutoSnoozePreset", "sidebarAutoSettleAfterDays")}
+              className="flex-row items-center justify-between gap-4 px-4 py-4"
+            >
+              <Text className="text-base text-foreground">Automatic snooze duration</Text>
+              <Text className="text-sm text-foreground-muted">
+                {snoozeOptions.find(
+                  (option) => option.value === referenceSettings.sidebarAutoSnoozePreset,
+                )?.label ?? "Longest available"}
+              </Text>
+            </Pressable>
+          </Menu>
+        ) : null}
+        <SettingsSwitchRow
+          icon="arrow.triangle.branch"
+          label="Settle when a PR merges"
+          value={referenceSettings.sidebarAutoSettleOnMerge}
+          disabled={disabledFor("sidebarAutoSettleOnMerge")}
+          onValueChange={(value) => writeToAll({ sidebarAutoSettleOnMerge: value })}
+        />
       </SettingsSection>
       {!props.pending && mismatches.length > 0 ? (
         <SettingsSection title={gt("Across environments")}>
           <View className="gap-3 p-4">
-            <Text className="text-base text-foreground">
-              <T>Auto-settle defaults differ</T>
-            </Text>
+            <Text className="text-base text-foreground">Automatic thread rules differ</Text>
             <Text className="text-sm text-foreground-muted">
               {mismatches.map((mismatch) => mismatch.label).join(", ")}
             </Text>
             <Button
-              label={gt("Apply auto-settle defaults")}
+              label="Apply automatic thread rules"
               tone="secondary"
               disabled={disabledFor("sidebarAutoSettleOnMerge", "sidebarAutoSettleAfterDays")}
               onPress={() => writeToAll(autoSettlePatch)}

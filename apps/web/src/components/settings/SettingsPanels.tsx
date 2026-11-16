@@ -1,5 +1,6 @@
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m as resolveMessage } from "~/i18n/messages";
+import { autoSnoozeOptions } from "@t3tools/shared/snoozePresets";
 import { useAtomValue } from "@effect/atom-react";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
@@ -538,6 +539,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? [gt("Working section")]
       : []),
+    ...(settings.sidebarPinnedMaxRows !== DEFAULT_UNIFIED_SETTINGS.sidebarPinnedMaxRows
+      ? ["Pinned icon rows"]
+      : []),
     ...(settings.sidebarPinnedPlacement !== DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPlacement
       ? ["Pinned threads position"]
       : []),
@@ -546,14 +550,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? ["Pop out ready pins"]
       : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
-      ? [gt("Auto-settle inactive threads")]
+      ? ["Automatic behavior after inactivity"]
       : []),
     ...(settings.sidebarAutoSettleKeepPullRequests !==
     DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests
       ? [gt("Keep threads with a PR")]
       : []),
     ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
-      ? [gt("Auto-settle merged threads")]
+      ? ["Automatic behavior on merge"]
       : []),
     ...(settings.computerUseAutoApproveAppAccess !==
     DEFAULT_UNIFIED_SETTINGS.computerUseAutoApproveAppAccess
@@ -742,6 +746,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarCompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarCompactCards,
       sidebarSingleLineThreads: DEFAULT_UNIFIED_SETTINGS.sidebarSingleLineThreads,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+      sidebarPinnedMaxRows: DEFAULT_UNIFIED_SETTINGS.sidebarPinnedMaxRows,
       sidebarPinnedPlacement: DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPlacement,
       sidebarPinnedPopOutWhenReady: DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPopOutWhenReady,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
@@ -844,7 +849,7 @@ function AutoSettleDaysInput({
           setField(cancelAutoSettleDaysField(field));
         }
       }}
-      aria-label={gt("Days of inactivity before auto-settle")}
+      aria-label="Days of inactivity"
     />
   );
 }
@@ -1053,6 +1058,55 @@ export function GeneralSettingsPanel() {
                 <SelectItem hideIndicator value="bottom">
                   Bottom
                 </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("pinned-thread-max-rows")}
+          description="Wrap pinned icons into this many rows before showing +N."
+          resetAction={
+            settings.sidebarPinnedMaxRows !== DEFAULT_UNIFIED_SETTINGS.sidebarPinnedMaxRows ? (
+              <SettingResetButton
+                label="pinned icon rows"
+                onClick={() =>
+                  updateSettings({
+                    sidebarPinnedMaxRows: DEFAULT_UNIFIED_SETTINGS.sidebarPinnedMaxRows,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={String(settings.sidebarPinnedMaxRows)}
+              onValueChange={(value) => {
+                const rows = [1, 2, 3, 4, 5, 6].find((rows) => String(rows) === value);
+                if (
+                  rows === 1 ||
+                  rows === 2 ||
+                  rows === 3 ||
+                  rows === 4 ||
+                  rows === 5 ||
+                  rows === 6
+                ) {
+                  updateSettings({ sidebarPinnedMaxRows: rows });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-44" aria-label="Pinned icon rows">
+                <SelectValue>
+                  {settings.sidebarPinnedMaxRows}{" "}
+                  {settings.sidebarPinnedMaxRows === 1 ? "row" : "rows"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {[1, 2, 3, 4, 5, 6].map((rows) => (
+                  <SelectItem hideIndicator key={rows} value={String(rows)}>
+                    {rows} {rows === 1 ? "row" : "rows"}
+                  </SelectItem>
+                ))}
               </SelectPopup>
             </Select>
           }
@@ -2075,6 +2129,13 @@ export function ThreadsSettingsPanel() {
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
   const environmentId = environment?.environmentId ?? null;
   const hasServerTargets = connectedEnvironments.length > 0;
+  const snoozeOptions = autoSnoozeOptions(settings.snoozePresets);
+  const automaticAction =
+    settings.sidebarAutoSettleAfterDays === null
+      ? "off"
+      : settings.sidebarAutoSnoozePreset === "settle"
+        ? "settle"
+        : "snooze";
   const mixedResponseStreamingMode = useScopedSettingsMixed(["responseStreamingMode"]);
   const providersByEnvironment = useEnvironmentProviders();
   const serverProviders =
@@ -2200,7 +2261,7 @@ export function ThreadsSettingsPanel() {
           serverScoped
           settingKeys={["computerUseAutoApproveAppAccess"]}
           {...setting("computer-use-auto-approve-app-access")}
-          description="Automatically accept Codex Computer Use requests to access any native app on this environment, including newly generated apps. Command, file, recording, and other MCP approvals keep their existing policies. Turn off to ask again for new app-access requests."
+          description="Automatically accept Codex Computer Use access to native apps, including newly generated apps. Turn off to ask again for new requests."
           resetAction={
             settings.computerUseAutoApproveAppAccess ? (
               <SettingResetButton
@@ -2262,14 +2323,123 @@ export function ThreadsSettingsPanel() {
       </SettingsSection>
 
       {hasServerTargets ? (
-        <SettingsSection id="auto-settle" title={gt("Auto-settle")}>
+        <SettingsSection id="auto-settle" title="Automatic thread organization">
+          <SettingsRow
+            serverScoped
+            {...setting("automatic-thread-action")}
+            settingKeys={["sidebarAutoSnoozePreset", "sidebarAutoSettleAfterDays"]}
+            description="Choose what happens after a thread has been inactive."
+            control={
+              <Select
+                value={automaticAction}
+                onValueChange={(value) => {
+                  if (value === "off") updateSettings({ sidebarAutoSettleAfterDays: null });
+                  else if (value === "snooze" || value === "settle")
+                    updateSettings({
+                      sidebarAutoSettleAfterDays:
+                        settings.sidebarAutoSettleAfterDays ?? AUTO_SETTLE_DEFAULT_DAYS,
+                      sidebarAutoSnoozePreset:
+                        value === "settle"
+                          ? "settle"
+                          : settings.sidebarAutoSnoozePreset === "settle"
+                            ? "longest"
+                            : settings.sidebarAutoSnoozePreset,
+                    });
+                }}
+              >
+                <SelectTrigger size="sm" aria-label="Action for inactive threads">
+                  <SelectValue>
+                    {automaticAction === "off"
+                      ? "Off"
+                      : automaticAction === "settle"
+                        ? "Settle"
+                        : "Snooze"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem value="off">Off</SelectItem>
+                  <SelectItem value="snooze">Snooze</SelectItem>
+                  <SelectItem value="settle">Settle</SelectItem>
+                </SelectPopup>
+              </Select>
+            }
+          />
+          {settings.sidebarAutoSettleAfterDays !== null ? (
+            <SettingsRow
+              serverScoped
+              settingKeys={["sidebarAutoSettleAfterDays"]}
+              {...setting("days-before-auto-settle")}
+              title="Days of inactivity"
+              description={
+                settings.sidebarAutoSnoozePreset === "settle"
+                  ? "Settle a thread after this many days without activity."
+                  : "After this many days without activity, snooze the thread for the duration selected below."
+              }
+              control={
+                <AutoSettleDaysInput
+                  value={settings.sidebarAutoSettleAfterDays}
+                  onCommit={(days, options) =>
+                    updateSettings({ sidebarAutoSettleAfterDays: days }, options)
+                  }
+                />
+              }
+            />
+          ) : null}
+          {automaticAction === "snooze" ? (
+            <SettingsRow
+              serverScoped
+              {...setting("automatic-snooze-duration")}
+              settingKeys={["sidebarAutoSnoozePreset"]}
+              description="Choose how long to snooze threads automatically. Longest available picks the latest wake time. Calendar times use this environment’s time zone."
+              control={
+                <Select
+                  value={settings.sidebarAutoSnoozePreset}
+                  onValueChange={(value) => {
+                    if (value !== null) updateSettings({ sidebarAutoSnoozePreset: value });
+                  }}
+                >
+                  <SelectTrigger size="sm" aria-label="Automatic snooze duration">
+                    <SelectValue>
+                      {snoozeOptions.find(
+                        (option) => option.value === settings.sidebarAutoSnoozePreset,
+                      )?.label ?? "Longest available"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end" alignItemWithTrigger={false}>
+                    {snoozeOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              }
+            />
+          ) : null}
+          {settings.sidebarAutoSettleAfterDays !== null && supportsAutoSettlementScope ? (
+            <SettingsRow
+              serverScoped
+              settingKeys={["sidebarAutoSettleKeepPullRequests"]}
+              title="Keep threads with a PR"
+              description="Skip inactivity rules for threads with a pull request. Merge and close rules still apply."
+              control={
+                <ScopedSwitch
+                  settingKeys={["sidebarAutoSettleKeepPullRequests"]}
+                  checked={settings.sidebarAutoSettleKeepPullRequests}
+                  onCheckedChange={(checked) =>
+                    updateSettings({ sidebarAutoSettleKeepPullRequests: checked })
+                  }
+                  aria-label="Keep threads with a PR"
+                />
+              }
+            />
+          ) : null}
           <SettingsRow
             serverScoped
             settingKeys={["sidebarAutoSettleOnMerge"]}
             {...setting("auto-settle-merged-threads")}
-            description={gt(
-              "Settle a thread when its pull request merges. Closed pull requests still settle automatically.",
-            )}
+            title="Settle when a PR merges"
+            description="Settle threads when their pull requests merge. Closed pull requests also settle automatically."
             resetAction={
               settings.sidebarAutoSettleOnMerge !==
               DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge ? (
@@ -2290,79 +2460,10 @@ export function ThreadsSettingsPanel() {
                 onCheckedChange={(checked) =>
                   updateSettings({ sidebarAutoSettleOnMerge: Boolean(checked) })
                 }
-                aria-label={gt("Auto-settle merged threads")}
+                aria-label="Settle when a PR merges"
               />
             }
           />
-
-          <SettingsRow
-            serverScoped
-            settingKeys={["sidebarAutoSettleAfterDays"]}
-            {...setting("auto-settle-inactive-threads")}
-            description={gt("Sidebar threads with no activity for this long settle automatically.")}
-            resetAction={
-              settings.sidebarAutoSettleAfterDays !==
-              DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ? (
-                <SettingResetButton
-                  ariaLabel={gt("Reset auto-settle to default")}
-                  onClick={() =>
-                    updateSettings({
-                      sidebarAutoSettleAfterDays:
-                        DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <ScopedSwitch
-                settingKeys={["sidebarAutoSettleAfterDays"]}
-                checked={settings.sidebarAutoSettleAfterDays !== null}
-                onCheckedChange={(checked) =>
-                  updateSettings({
-                    sidebarAutoSettleAfterDays: checked ? AUTO_SETTLE_DEFAULT_DAYS : null,
-                  })
-                }
-                aria-label={gt("Auto-settle inactive threads")}
-              />
-            }
-          />
-          {settings.sidebarAutoSettleAfterDays !== null ? (
-            <SettingsRow
-              serverScoped
-              settingKeys={["sidebarAutoSettleAfterDays"]}
-              title={setting("days-before-auto-settle").title}
-              description={gt("Any new activity un-settles a thread automatically.")}
-              control={
-                <AutoSettleDaysInput
-                  value={settings.sidebarAutoSettleAfterDays}
-                  onCommit={(days, options) =>
-                    updateSettings({ sidebarAutoSettleAfterDays: days }, options)
-                  }
-                />
-              }
-            />
-          ) : null}
-          {settings.sidebarAutoSettleAfterDays !== null && supportsAutoSettlementScope ? (
-            <SettingsRow
-              serverScoped
-              settingKeys={["sidebarAutoSettleKeepPullRequests"]}
-              title={gt("Keep threads with a PR")}
-              description={gt(
-                "Inactivity does not settle threads with a pull request. Merge and close still do.",
-              )}
-              control={
-                <ScopedSwitch
-                  settingKeys={["sidebarAutoSettleKeepPullRequests"]}
-                  checked={settings.sidebarAutoSettleKeepPullRequests}
-                  onCheckedChange={(checked) =>
-                    updateSettings({ sidebarAutoSettleKeepPullRequests: checked })
-                  }
-                  aria-label={gt("Keep threads with a PR")}
-                />
-              }
-            />
-          ) : null}
         </SettingsSection>
       ) : null}
 

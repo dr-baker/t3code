@@ -70,6 +70,7 @@ vi.mock("../threads/thread-settings-options", () => ({
   withManagedRuntimeModeLimits: (choices: readonly unknown[]) => choices,
 }));
 vi.mock("../../components/ui/ScreenScrollView", () => ({ ScreenScrollView: Children }));
+vi.mock("../../components/ui/Menu", () => ({ Menu: Children }));
 vi.mock("../../components/ui/AppText", () => ({ AppText: Children }));
 vi.mock("../../components/ui/Button", () => ({
   Button: ({
@@ -216,7 +217,7 @@ describe("SettingsServerControlsRouteScreen", () => {
       )!;
 
     act(() => toggle("Agent browser access").click());
-    act(() => toggle("Auto-settle merged threads").click());
+    act(() => toggle("Settle when a PR merges").click());
 
     // Both rewrite the whole project override, so a second write planned now would drop the first.
     expect(mocks.updateSettings).toHaveBeenCalledOnce();
@@ -232,7 +233,7 @@ describe("SettingsServerControlsRouteScreen", () => {
     act(() => root.render(<SettingsThreadsRouteScreen />));
 
     const autoSettle = [...container.querySelectorAll<HTMLButtonElement>('[role="switch"]')].find(
-      (button) => button.textContent === "Auto-settle merged threads",
+      (button) => button.textContent === "Settle when a PR merges",
     )!;
     expect(autoSettle.disabled).toBe(true);
   });

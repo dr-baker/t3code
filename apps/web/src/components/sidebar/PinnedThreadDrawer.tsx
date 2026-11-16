@@ -6,7 +6,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
+import { SortableContext, rectSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { AuthOrchestrationOperateScope, type EnvironmentId } from "@t3tools/contracts";
 import { useEnvironmentScope } from "~/state/session";
@@ -34,6 +34,7 @@ export function PinnedThreadDrawer(props: {
   hidden: boolean;
   dragging: boolean;
   animationDuration: number;
+  maxRows: number;
   onToggle: () => void;
   onFullyCollapse: () => void;
   onSectionContextMenu: (event: MouseEvent) => void;
@@ -51,7 +52,11 @@ export function PinnedThreadDrawer(props: {
     measure();
     return observeResize(node, measure);
   }, []);
-  const { visible, hiddenCount } = pinnedDrawerPreview(props.expanded ? [] : props.threads, width);
+  const { visible, hiddenCount } = pinnedDrawerPreview(
+    props.expanded ? [] : props.threads,
+    width,
+    props.maxRows,
+  );
   return (
     <div ref={container}>
       <CollapsibleSectionHeader
@@ -75,7 +80,7 @@ export function PinnedThreadDrawer(props: {
         >
           <SortableContext
             items={visible.filter((thread) => !thread.ghost).map((thread) => thread.key)}
-            strategy={horizontalListSortingStrategy}
+            strategy={rectSortingStrategy}
           >
             {visible.map((thread) => (
               <PinnedThreadIcon
