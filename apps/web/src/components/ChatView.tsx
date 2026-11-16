@@ -3773,7 +3773,11 @@ export default function ChatView(props: ChatViewProps) {
                             ) : null}
                             {!composerMounted ? null : (
                               <ChatComposer
-                                currentPlan={composerPlan ? { plan: composerPlan, working: !latestRunSettled } : null}
+                                currentPlan={
+                                  composerPlan
+                                    ? { plan: composerPlan, working: !latestRunSettled }
+                                    : null
+                                }
                                 canOperateThread={canOperateThread}
                                 reportedModelSelection={reportedModelSelection}
                                 multipleModelSelections={multipleModelSelections}

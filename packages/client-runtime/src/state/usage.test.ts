@@ -2,8 +2,6 @@ import {
   EnvironmentId,
   RunId,
   type ThreadCost,
-  ProviderDriverKind,
-  ProviderInstanceId,
   UsageDay,
   USAGE_CONTRACT_VERSION,
   type UsageModelFilter,

@@ -3775,7 +3775,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const transcript = makeCodexReplayTranscript({
           scenario: "computer-use-auto-approval",
           entries: [
-            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt }),
+            ...codexReplayPreamble({
+              nativeThreadId,
+              nativeTurnId,
+              prompt,
+              turnPolicy: {
+                approvalPolicy: "untrusted",
+                sandboxPolicy: { type: "readOnly" },
+              },
+            }),
             ...requests.flatMap((frame): CodexReplay.CodexAppServerReplayEntry[] => [
               { type: "emit_inbound", label: `request-${frame.id}`, frame },
               {
@@ -3816,15 +3824,17 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ),
           ).values(),
         ];
-        yield* harness.runtime.startTurn(
-          makeCodexTestTurnInput({
-            threadId: harness.threadId,
-            providerThread: harness.providerThread,
-            now: yield* DateTime.now,
-            attemptId: RunAttemptId.make("computer-use-attempt"),
-            text: prompt,
-          }),
-        );
+        const turnInput = makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("computer-use-attempt"),
+          text: prompt,
+        });
+        yield* harness.runtime.startTurn({
+          ...turnInput,
+          runtimePolicy: { ...turnInput.runtimePolicy, runtimeMode: "approval-required" },
+        });
         for (const [index, kind] of [
           "mcp-elicitation",
           "mcp-elicitation",

@@ -89,7 +89,6 @@ const layerTurnItemPositionsTest = Layer.mock(TurnItemPositionStore.TurnItemPosi
 
 const layerRunExecutionTest = RunExecutionService.layer.pipe(
   Layer.provide(RunUpdateErrors.layer),
-  Layer.provide(RunUpdateErrors.layer),
   Layer.provide(
     Layer.mergeAll(
       McpAppModelContext.layerEmpty,
@@ -974,7 +973,6 @@ it.effect("passes the thread's MCP app context to the provider under a safe key"
     Effect.provide(
       RunExecutionService.layer.pipe(
         Layer.provide(RunUpdateErrors.layer),
-        Layer.provide(RunUpdateErrors.layer),
         Layer.provide(
           Layer.mergeAll(
             PreviewAgentActivity.layer,
@@ -1017,7 +1015,6 @@ it.effect("fails the run when its ownership check cannot be read before calling 
     const attemptId = RunAttemptId.make("attempt:run-execution-start-guard-read");
     const providerInstanceId = ProviderInstanceId.make("codex");
     const layerTest = RunExecutionService.layer.pipe(
-      Layer.provide(RunUpdateErrors.layer),
       Layer.provide(RunUpdateErrors.layer),
       Layer.provide(
         Layer.mergeAll(
@@ -1222,7 +1219,6 @@ it.effect("starts the provider when checkpoint baseline capture fails", () =>
       }>
     >([]);
     const layerTest = RunExecutionService.layer.pipe(
-      Layer.provide(RunUpdateErrors.layer),
       Layer.provide(RunUpdateErrors.layer),
       Layer.provide(
         Layer.mergeAll(
@@ -1439,7 +1435,6 @@ it.effect.each(["failure", "interruption", "stale-attempt", "start-guard"] as co
       const writes = yield* Ref.make<ReadonlyArray<ReadonlyArray<OrchestrationV2DomainEvent>>>([]);
       const layerTest = RunExecutionService.layer.pipe(
         Layer.provide(RunUpdateErrors.layer),
-        Layer.provide(RunUpdateErrors.layer),
         Layer.provide(
           Layer.mergeAll(
             McpAppModelContext.layerEmpty,
@@ -1615,7 +1610,6 @@ it.effect("ingests new member threads of an owned child after the root turn term
     const origins = yield* Ref.make<ReadonlyArray<readonly [string, unknown, unknown]>>([]);
     const requests = yield* Ref.make<ReadonlyArray<string>>([]);
     const layerTest = RunExecutionService.layer.pipe(
-      Layer.provide(RunUpdateErrors.layer),
       Layer.provide(RunUpdateErrors.layer),
       Layer.provide(
         Layer.mergeAll(
@@ -1888,7 +1882,6 @@ it.effect("ends a nested native subagent and its thread when the root run is int
     const grandchildRootId = NodeId.make(`node:${key}:grandchild-root`);
     const finalized = yield* Deferred.make<ReadonlyArray<OrchestrationV2DomainEvent>>();
     const layerTest = RunExecutionService.layer.pipe(
-      Layer.provide(RunUpdateErrors.layer),
       Layer.provide(RunUpdateErrors.layer),
       Layer.provide(
         Layer.mergeAll(
@@ -2508,7 +2501,6 @@ it.effect(
       const ingested = yield* Ref.make<ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>>([]);
       const ingestionDone = yield* Deferred.make<void>();
       const layerTest = RunExecutionService.layer.pipe(
-        Layer.provide(RunUpdateErrors.layer),
         Layer.provide(RunUpdateErrors.layer),
         Layer.provide(
           Layer.mergeAll(
@@ -4107,7 +4099,6 @@ function captureRootRunTermination(input: {
         }
       });
     const layerTest = RunExecutionService.layer.pipe(
-      Layer.provide(RunUpdateErrors.layer),
       Layer.provide(
         input.updateErrors === undefined
           ? RunUpdateErrors.layer
@@ -4689,7 +4680,6 @@ function runBackgroundItemScenario(
           )
         : undefined;
     const layerTest = RunExecutionService.layer.pipe(
-      Layer.provide(RunUpdateErrors.layer),
       Layer.provide(RunUpdateErrors.layer),
       Layer.provide(
         Layer.mergeAll(
