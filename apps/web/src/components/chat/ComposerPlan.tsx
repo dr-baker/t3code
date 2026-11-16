@@ -1,8 +1,9 @@
-import type { OrchestrationV2PlanArtifact } from "@t3tools/contracts";
+import type { OrchestrationV2PlanArtifact, PlanId } from "@t3tools/contracts";
 import { CheckIcon, ChevronDownIcon, CircleDotIcon, CircleIcon, ListTodoIcon } from "lucide-react";
 import { memo, useId, useState } from "react";
 
 import { cn } from "~/lib/utils";
+import { ComposerBanner } from "./ComposerBanner";
 
 type TodoPlan = Extract<OrchestrationV2PlanArtifact, { kind: "todo_list" }>;
 
@@ -10,13 +11,24 @@ export const ComposerPlan = memo(function ComposerPlan({
   plan,
   working,
 }: {
-  plan: TodoPlan;
+  plan: TodoPlan | null;
   working: boolean;
 }) {
+  const [dismissedPlans, setDismissedPlans] = useState<ReadonlySet<PlanId>>(() => new Set());
+  if (plan === null || plan.steps.length === 0 || dismissedPlans.has(plan.id)) return null;
   const complete = plan.steps.every((step) => step.status === "completed");
-  if (plan.steps.length === 0) return null;
   return (
-    <PlanDetails key={`${plan.id}:${complete}`} plan={plan} working={working} complete={complete} />
+    <div data-chat-composer-plan className="mt-2">
+      <ComposerBanner.Root detached>
+        <PlanDetails
+          key={`${plan.id}:${complete}`}
+          plan={plan}
+          working={working}
+          complete={complete}
+          onDismiss={() => setDismissedPlans((current) => new Set(current).add(plan.id))}
+        />
+      </ComposerBanner.Root>
+    </div>
   );
 });
 
@@ -24,10 +36,12 @@ function PlanDetails({
   plan,
   working,
   complete,
+  onDismiss,
 }: {
   plan: TodoPlan;
   working: boolean;
   complete: boolean;
+  onDismiss: () => void;
 }) {
   const [expanded, setExpanded] = useState(!complete && plan.steps.length <= 5);
   const detailsId = useId();
@@ -37,30 +51,33 @@ function PlanDetails({
     plan.steps.find((step) => step.status === "pending");
   return (
     <section aria-label="Current plan" className="relative z-10 text-sm">
-      <button
-        type="button"
-        aria-expanded={expanded}
-        aria-controls={detailsId}
-        onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left hover:bg-accent/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-      >
-        {complete ? (
-          <CheckIcon aria-hidden className="size-4 shrink-0 text-success" />
-        ) : (
-          <ListTodoIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-        )}
-        <span className="shrink-0 text-xs text-muted-foreground max-sm:sr-only">Plan</span>
-        <span className="min-w-0 flex-1 truncate font-medium">
-          {complete ? "Plan complete" : current?.text}
-        </span>
-        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-          {done} / {plan.steps.length}
-        </span>
-        <ChevronDownIcon
-          aria-hidden
-          className={cn("size-3.5 shrink-0 text-muted-foreground", expanded && "rotate-180")}
-        />
-      </button>
+      <div className="flex items-center pr-1.5">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={detailsId}
+          onClick={() => setExpanded((value) => !value)}
+          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-3 py-2.5 text-left hover:bg-accent/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+        >
+          {complete ? (
+            <CheckIcon aria-hidden className="size-4 shrink-0 text-success" />
+          ) : (
+            <ListTodoIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+          )}
+          <span className="shrink-0 text-xs text-muted-foreground max-sm:sr-only">Plan</span>
+          <span className="min-w-0 flex-1 truncate font-medium">
+            {complete ? "Plan complete" : current?.text}
+          </span>
+          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+            {done} / {plan.steps.length}
+          </span>
+          <ChevronDownIcon
+            aria-hidden
+            className={cn("size-3.5 shrink-0 text-muted-foreground", expanded && "rotate-180")}
+          />
+        </button>
+        <ComposerBanner.Dismiss type="button" aria-label="Hide plan" onClick={onDismiss} />
+      </div>
       <div id={detailsId} hidden={!expanded}>
         <ol className="max-h-48 space-y-1 overflow-y-auto px-3 pb-3">
           {plan.steps.map((step) => {

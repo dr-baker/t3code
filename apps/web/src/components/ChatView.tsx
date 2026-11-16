@@ -353,7 +353,6 @@ import { useRightPanelSurfaceClose } from "../hooks/useRightPanelSurfaceClose";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import { modelFallbackBannerItem } from "./chat/ComposerUsageLimits";
 import { ComposerSurface } from "./chat/ComposerSurface";
-import { ComposerBanner } from "./chat/ComposerBanner";
 import { ComposerPlan } from "./chat/ComposerPlan";
 import { resolveThreadSyncPhase } from "../threadSync";
 import { hasAvailableCompactionProvider } from "./chat/compaction.logic";
@@ -4000,16 +3999,12 @@ export default function ChatView(props: ChatViewProps) {
                           </div>
                         </div>
                       </ComposerSurface.Shell>
-                      {composerMounted &&
-                      pendingUserInputs.length === 0 &&
-                      composerPlan &&
-                      composerPlan.steps.length > 0 ? (
-                        <div data-chat-composer-plan className="mt-2">
-                          <ComposerBanner.Root detached>
-                            <ComposerPlan plan={composerPlan} working={!latestRunSettled} />
-                          </ComposerBanner.Root>
-                        </div>
-                      ) : null}
+                      <ComposerPlan
+                        plan={
+                          composerMounted && pendingUserInputs.length === 0 ? composerPlan : null
+                        }
+                        working={!latestRunSettled}
+                      />
                       {isDraftHeroState && composerBannerItems.length > 0 ? (
                         // Out of flow, like the headline, so a notice never moves the centered composer.
                         // Short windows pin the composer to the bottom, where an out-of-flow notice
