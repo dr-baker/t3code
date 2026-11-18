@@ -1,3 +1,4 @@
+import type { OrchestrationV2Run } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { msg } from "gt-react";
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
@@ -532,6 +533,14 @@ export type MessagesTimelineRow = MessagesTimelineRowContent & {
 };
 
 type MessagesTimelineRowContent =
+  | {
+      kind: "rewrite";
+      id: string;
+      createdAt: string | null;
+      runId: RunId;
+      group: OrchestrationV2Run["rewrites"];
+      selected: NonNullable<OrchestrationV2Run["rewrites"]>["candidates"][number] | undefined;
+    }
   | {
       kind: "worktree-setup";
       id: string;
@@ -2783,6 +2792,14 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     }
     case "worktree-setup":
       return a.snapshot === (b as typeof a).snapshot;
+
+    case "rewrite":
+      return (
+        a.createdAt === b.createdAt &&
+        b.kind === "rewrite" &&
+        a.group === b.group &&
+        a.selected === b.selected
+      );
 
     case "assistant-meta": {
       const bm = b as typeof a;

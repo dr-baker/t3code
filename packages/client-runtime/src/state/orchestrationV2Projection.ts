@@ -332,14 +332,26 @@ export function applyOrchestrationV2ProjectionEvent(
         thread: applyOrchestrationV2ThreadVisit(projection.thread, event.payload),
       };
     case "run.created":
-    case "run.updated": {
+    case "run.updated":
+    case "run.rewrites-updated": {
       // Lifecycle updates carry the run as it was when the turn started. What the run returned
       // is written by its own event, and an update without it must not take it away.
       const known = base.runs.find((run) => run.id === event.payload.id);
-      const run =
+      if (
+        known &&
+        (event.type === "run.rewrites-updated" ||
+          (event.type === "run.updated" && event.rewritesOnly))
+      ) {
+        return {
+          ...base,
+          runs: upsertEntity(base.runs, { ...known, rewrites: event.payload.rewrites }),
+        };
+      }
+      const runWithOutput =
         event.payload.output === undefined && known?.output !== undefined
           ? { ...event.payload, output: known.output }
           : event.payload;
+      const run = known?.rewrites ? { ...runWithOutput, rewrites: known.rewrites } : runWithOutput;
       const next = { ...base, runs: upsertEntity(base.runs, run) };
       const visible = { ...next, visibleTurnItems: activeVisibleTurnItems(next) };
       const wasQueued = known?.status === "queued";

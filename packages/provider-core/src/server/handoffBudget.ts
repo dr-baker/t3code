@@ -11,6 +11,11 @@ import type {
 import { withMessageSenderNote } from "@t3tools/contracts";
 
 import * as Config from "effect/Config";
+import {
+  htmlRenderFromToolItem,
+  mcpAppFromToolItem,
+  sentMessageFromToolItem,
+} from "@t3tools/shared/toolOutput";
 
 export const DEFAULT_HANDOFF_TOKEN_CAP = 16_000;
 const HANDOFF_BYTE_CAP = 64_000;
@@ -143,6 +148,20 @@ export function historicalMessage(
     case "assistant_message":
       text = item.text;
       break;
+    case "dynamic_tool": {
+      if (item.status !== "completed") return null;
+      const sent = sentMessageFromToolItem(item);
+      const render = htmlRenderFromToolItem(item);
+      const app = mcpAppFromToolItem(item);
+      const output = [
+        sent,
+        render && `HTML visualization "${render.title}" (attachment ${render.attachmentId})`,
+        app && `MCP app from ${app.server}.${app.tool} (attachment ${app.attachmentId})`,
+      ].filter((part) => part !== undefined);
+      if (output.length === 0) return null;
+      text = output.join("\n");
+      break;
+    }
     case "command_execution":
       text = [
         `Command: ${item.input}`,

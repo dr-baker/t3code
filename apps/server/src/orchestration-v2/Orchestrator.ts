@@ -656,6 +656,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.pin.reorder":
     case "thread.active.reorder":
     case "thread.tag.set":
+    case "thread.rewrites.start":
+    case "thread.rewrites.select":
     case "thread.visit":
     case "thread.mark-unread":
     case "thread.metadata.update":
@@ -6023,6 +6025,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const dispatchThreadFork = Effect.fn("orchestrationV2.dispatch.threadFork")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "thread.fork" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    rewrite?: true,
   ) {
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.command_id": command.commandId,
@@ -6124,6 +6127,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         targetThreadId: command.targetThreadId,
         ...(command.title === undefined ? {} : { title: command.title }),
         ...(command.sideChat ? { sideChat: true } : {}),
+        ...(rewrite ? { rewrite } : {}),
         createdBy: command.createdBy,
         creationSource: command.creationSource,
         createdAt: now,
@@ -6149,6 +6153,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const dispatchThreadMergeBack = Effect.fn("orchestrationV2.dispatch.threadMergeBack")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "thread.merge_back" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    replacing?: OrchestrationV2ContextTransfer["id"],
   ) {
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.command_id": command.commandId,
@@ -6215,7 +6220,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         transfer.type === "merge_back" &&
         transfer.status === "pending" &&
         transfer.targetThreadId === command.targetThreadId &&
-        transfer.sourceThreadId !== command.sourceThreadId,
+        transfer.sourceThreadId !== command.sourceThreadId &&
+        transfer.id !== replacing,
     );
     if (otherPendingMergeBack) {
       return yield* new OrchestratorDispatchError({
@@ -6312,6 +6318,164 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       providerInstanceId: sourceRun.providerInstanceId,
       occurredAt: now,
       payload: transfer,
+    });
+  });
+
+  const dispatchRewrites = Effect.fn("Orchestrator.dispatchRewrites")(function* (
+    command: Extract<
+      OrchestrationV2Command,
+      { type: "thread.rewrites.start" | "thread.rewrites.select" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    const projection = yield* loadProjectionForCommand(command, ["runs", "contextTransfers"]);
+    const { thread } = projection;
+    const run = projection.runs.find((item) => item.id === command.runId);
+    const reject = (cause: string) =>
+      new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause,
+      });
+    if (
+      !run ||
+      (run.status !== "completed" && run.status !== "waiting") ||
+      thread.archivedAt !== null ||
+      thread.deletedAt !== null ||
+      thread.lineage.sideChat ||
+      thread.lineage.relationshipToParent === "subagent" ||
+      thread.delegatedFrom !== undefined
+    ) {
+      return yield* reject("Rewrites need a finished answer in an active parent thread.");
+    }
+    const now = yield* DateTime.now;
+    let rewrites = run.rewrites;
+    if (command.type === "thread.rewrites.start") {
+      if (rewrites) return;
+      const settings = yield* serverSettings.getSettings.pipe(mapDispatchError(command));
+      const { rewriteCouncil } = settings;
+      if (!rewriteCouncil.length)
+        return yield* reject("Choose your rewrite council in Settings → Threads.");
+      const disabledSeat = rewriteCouncil.find(
+        ({ instanceId }) =>
+          !resolveProjectProviderInstanceEnabled(settings, thread.projectId, instanceId),
+      );
+      if (disabledSeat) {
+        return yield* reject(
+          `Rewrite council provider ${disabledSeat.instanceId} is disabled for this project.`,
+        );
+      }
+      const candidates = [];
+      for (const modelSelection of rewriteCouncil) {
+        const threadId = ThreadId.make(`rewrite-${command.commandId}-${candidates.length + 1}`);
+        const childCommandId = CommandId.make(`${command.commandId}:${threadId}`);
+        yield* dispatchThreadFork(
+          {
+            ...command,
+            type: "thread.fork",
+            commandId: childCommandId,
+            sourceThreadId: thread.id,
+            targetThreadId: threadId,
+            sourcePoint: { type: "run", runId: run.id },
+            sideChat: true,
+            title: `Rewrite · ${modelSelection.model}`,
+          },
+          events,
+          true,
+        );
+        yield* dispatchMessage(
+          {
+            ...command,
+            type: "message.dispatch",
+            commandId: childCommandId,
+            threadId,
+            messageId: MessageId.make(`${threadId}:prompt`),
+            modelSelection,
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            text: "Rewrite the last assistant answer to give the user the information they need. Choose your own structure, examples, and level of detail. Use the original request as context for writing the answer. Do not repeat the underlying task or change project files. Use any available skills that improve the presentation, including visualizations when helpful. End with a Skills used line listing the skills you actually used, or None.",
+          },
+          events,
+          effects,
+        );
+        candidates.push({
+          threadId,
+          runId: idAllocator.derive.run({ threadId, ordinal: 1 }),
+          modelSelection,
+        });
+      }
+      rewrites = { candidates, selectedThreadId: null };
+    } else {
+      if (!rewrites) return yield* reject("This turn has no rewrites.");
+      if (command.candidateThreadId === rewrites.selectedThreadId) return;
+      const candidate = rewrites.candidates.find(
+        (entry) => entry.threadId === command.candidateThreadId,
+      );
+      if (command.candidateThreadId !== null && !candidate)
+        return yield* reject("This rewrite belongs to another turn.");
+      const { selectedThreadId } = rewrites;
+      const selected = rewrites.candidates.find((entry) => entry.threadId === selectedThreadId);
+      const previous =
+        selected &&
+        projection.contextTransfers.find(
+          (transfer) =>
+            transfer.type === "merge_back" &&
+            transfer.status === "pending" &&
+            transfer.targetThreadId === thread.id &&
+            transfer.sourceThreadId === selected.threadId &&
+            transfer.sourcePoint.runId === selected.runId,
+        );
+      if (candidate) {
+        if (
+          projection.contextTransfers.some(
+            (transfer) =>
+              transfer.type === "merge_back" &&
+              transfer.status === "pending" &&
+              transfer.targetThreadId === thread.id &&
+              transfer.id !== previous?.id,
+          )
+        ) {
+          return yield* reject(
+            "Send a message with the pending Bring back before choosing a rewrite.",
+          );
+        }
+        const child = yield* findThread(candidate.threadId);
+        if (!child || child.deletedAt !== null) return yield* reject("This rewrite was deleted.");
+        yield* dispatchThreadMergeBack(
+          {
+            ...command,
+            type: "thread.merge_back",
+            sourceThreadId: candidate.threadId,
+            targetThreadId: thread.id,
+            sourcePoint: { type: "run", runId: candidate.runId },
+          },
+          events,
+          previous?.id,
+        );
+      }
+      if (previous) {
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "context-transfer.updated",
+          threadId: thread.id,
+          occurredAt: now,
+          payload: { ...previous, status: "superseded", updatedAt: now },
+        });
+      }
+      rewrites = { ...rewrites, selectedThreadId: command.candidateThreadId };
+    }
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "run.rewrites-updated",
+      threadId: thread.id,
+      runId: run.id,
+      occurredAt: now,
+      payload: { ...run, rewrites },
     });
   });
 
@@ -8934,21 +9098,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       sourceProjection === null || sourceRun === null
         ? undefined
         : providerThreadForRun(sourceProjection, sourceRun);
-    const sourceProviderTurnId =
-      sourceProjection === null || sourceRun === null || sourceRun.activeAttemptId === null
+    const sourceProviderTurn =
+      sourceProjection === null || sourceRun === null
         ? undefined
-        : (latestProviderTurnForAttempt(sourceProjection.providerTurns, sourceRun.activeAttemptId)
-            ?.id ??
-          sourceProjection.attempts.find((candidate) => candidate.id === sourceRun.activeAttemptId)
-            ?.providerTurnId ??
-          undefined);
+        : providerTurnForRun(sourceProjection, sourceRun);
+    const sourceProviderTurnId = sourceProviderTurn?.id;
+    const rewriteFork = projection.thread.lineage.rewrite === true;
     const sideChatFork =
-      pendingForkTransfer !== undefined && projection.thread.lineage.sideChat === true;
+      pendingForkTransfer !== undefined &&
+      projection.thread.lineage.sideChat === true &&
+      !projection.thread.lineage.rewrite;
     // Opened during the parent's first turn: the digest is the whole context.
     const sideChatWithoutSource =
       sideChatFork && pendingForkTransfer.sourcePoint.runId === undefined;
     if (pendingForkTransfer !== undefined) {
-      if (!sideChatWithoutSource && (sourceRun === null || sourceProviderThread === undefined)) {
+      if (
+        !sideChatWithoutSource &&
+        (sourceRun === null || (!rewriteFork && sourceProviderThread === undefined))
+      ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
@@ -9030,7 +9197,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               capabilities,
               sameProvider:
                 pendingForkTransfer.sourceProviderInstanceId === modelSelection.instanceId,
-              hasStrongNativeSource: sourceProviderThread?.nativeThreadRef?.strength === "strong",
+              hasStrongNativeSource:
+                sourceProviderThread?.nativeThreadRef?.strength === "strong" &&
+                (!rewriteFork ||
+                  (sourceProviderTurn?.providerThreadId === sourceProviderThread.id &&
+                    sourceProviderTurn.nativeTurnRef?.strength === "strong")),
               hasNativeTurnBoundary:
                 sourceProjection?.providerTurns.find((turn) => turn.id === sourceProviderTurnId)
                   ?.nativeTurnRef != null,
@@ -16136,6 +16307,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.interrupt.unresponsive":
         yield* dispatchInterruptUnresponsive(command, events);
         break;
+      case "thread.rewrites.start":
+      case "thread.rewrites.select":
+        yield* dispatchRewrites(command, events, effects);
+        break;
       case "thread.fork":
         yield* dispatchThreadFork(command, events);
         break;
@@ -16298,6 +16473,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         (planned) =>
           planned.events.length > 0 ||
           isUnobservedAcknowledgement(command) ||
+          command.type === "thread.rewrites.start" ||
+          command.type === "thread.rewrites.select" ||
           command.type === "thread.background-work.settle" ||
           // A stale visit changes no read state.
           command.type === "thread.visit" ||

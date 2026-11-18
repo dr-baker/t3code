@@ -382,6 +382,17 @@ unarchiving the thread brings them back.
 On mobile, a thread lists its side chats above the composer. Tap one to open it and
 answer its questions.
 
+## Rewrites
+
+Choose the models and reasoning effort in **Settings → Threads → Rewrite council**. Select
+**Rewrites** on a finished answer to have each member answer the original request independently.
+Switch between the original and the council members to read their answers and visualizations.
+
+**Use this rewrite** displays that answer in the thread and brings its context into your next
+message. Reopen **Rewrites** to switch answers or choose **Original → Use original**. Switching
+before sending a message updates which answer is brought back. Messages already sent keep their
+original context.
+
 ## Snooze until later
 
 To change the choices in the snooze menu, open **Settings → Threads → Snooze options**.

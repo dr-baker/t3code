@@ -16,6 +16,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { PrimaryConnectionTarget } from "../connection/model.ts";
 import { v2Now, v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
+import { placeRewriteControls } from "./threadRelationships.ts";
 import { isThreadWorking } from "./threadInbox.ts";
 import {
   childThreadInputsTitle,
@@ -87,6 +88,56 @@ describe("v2 thread shell lists", () => {
     expect(registry.get(threads.threadRefsAtom)).not.toContainEqual(ref);
     registry.set(lookupThreadAtom(ref), null);
     expect(registry.get(target)).toBeNull();
+    release();
+    registry.dispose();
+  });
+
+  it("replaces an artifact-only answer at its run boundary and restores it when the rewrite disappears", () => {
+    const { registry, threads, lookupThreadAtom } = makeHarness();
+    const runId = RunId.make("original-run");
+    const candidate = {
+      threadId: ThreadId.make("rewrite-child"),
+      runId: RunId.make("rewrite-run"),
+      modelSelection: v2ThreadShell.modelSelection,
+    };
+    const runs = [
+      {
+        id: runId,
+        status: "completed" as const,
+        rewrites: { candidates: [candidate], selectedThreadId: candidate.threadId },
+      },
+    ];
+    const candidateRef = { environmentId, threadId: candidate.threadId };
+    const shell = lookupThreadAtom(candidateRef);
+    const availableCandidates = threads.availableRewriteCandidatesAtom(environmentId, runs);
+    const release = registry.mount(availableCandidates);
+    const layout = () =>
+      placeRewriteControls({
+        rows: [
+          { id: "request", runId, answer: false },
+          { id: "sent message", runId, answer: true },
+          { id: "chart", runId, answer: true },
+          { id: "later request", runId: RunId.make("later-run"), answer: false },
+        ],
+        runs,
+        availableCandidates: registry.get(availableCandidates),
+        describe: (row) => row,
+        makeControl: (row, _runId, _group, selected) => ({
+          ...row,
+          id: selected ? "rewrite output and controls" : "rewrite controls",
+        }),
+      }).map((row) => row.id);
+
+    registry.set(shell, { ...v2ThreadShell, id: candidate.threadId });
+    expect(layout()).toEqual(["request", "rewrite output and controls", "later request"]);
+    registry.set(shell, null);
+    expect(layout()).toEqual([
+      "request",
+      "sent message",
+      "chart",
+      "rewrite controls",
+      "later request",
+    ]);
     release();
     registry.dispose();
   });

@@ -541,6 +541,29 @@ it.effect("requires access management to answer a link request", () =>
   }),
 );
 
+it.effect("checks the destination operate grant for starting and choosing rewrites", () =>
+  Effect.gen(function* () {
+    const registry = yield* setup;
+    registry.set(sessions(env), AsyncResult.success(grant(true)));
+    registry.set(
+      sessions(other),
+      AsyncResult.success({
+        ...grant(false),
+        scopes: [AuthOrchestrationReadScope],
+        permissions: [AuthOrchestrationReadScope],
+      }),
+    );
+    const dispatch = createCommandPermissions(runtime, ORCHESTRATION_V2_WS_METHODS.dispatchCommand);
+    for (const type of ["thread.rewrites.start", "thread.rewrites.select"]) {
+      const input = { type };
+      expect(registry.get(dispatch.permissionAtom(env, input))).toBe(true);
+      expect(registry.get(dispatch.permissionAtom(other, input))).toBe(false);
+      const denied = yield* dispatch.authorize(registry, other, input).pipe(Effect.flip);
+      expect(denied.requiredPermission).toBe(AuthOrchestrationOperateScope);
+    }
+  }),
+);
+
 it.effect("honors exact empty permissions and preserves legacy parent grants", () =>
   Effect.gen(function* () {
     const registry = yield* setup;

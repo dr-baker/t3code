@@ -984,6 +984,7 @@ function preserveRunRecordedFields(
   if (current === undefined) return next;
   return {
     ...next,
+    ...(current.rewrites ? { rewrites: current.rewrites } : {}),
     ...(next.delegatedCompletion === undefined && current.delegatedCompletion !== undefined
       ? { delegatedCompletion: current.delegatedCompletion }
       : {}),
@@ -1105,6 +1106,13 @@ export function applyToProjection(
           ),
         ),
       });
+    case "run.rewrites-updated":
+      return {
+        ...base,
+        runs: base.runs.map((r) =>
+          r.id === event.payload.id ? { ...r, rewrites: event.payload.rewrites } : r,
+        ),
+      };
     case "run.background-work-cancelled":
       return {
         ...base,
@@ -2619,11 +2627,23 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 completed_at = excluded.completed_at,
                 payload_json = ${keepRecordedRunOutput(
                   keepRecordedRunField(
-                    keepRecordedRunField(sql`excluded.payload_json`, "$.delegatedCompletion"),
+                    keepRecordedRunField(
+                      sql`CASE WHEN json_type(orchestration_v2_projection_runs.payload_json, '$.rewrites') IS NULL
+                        THEN excluded.payload_json ELSE json_set(excluded.payload_json, '$.rewrites',
+                          json_extract(orchestration_v2_projection_runs.payload_json, '$.rewrites')) END`,
+                      "$.delegatedCompletion",
+                    ),
                     "$.restartCancelledBackgroundWork",
                   ),
                 )}
             `;
+              break;
+            }
+            case "run.rewrites-updated": {
+              const payload = yield* encodeRunPayload(event.payload);
+              yield* sql`UPDATE orchestration_v2_projection_runs
+                SET payload_json = json_set(payload_json, '$.rewrites', json_extract(${payload}, '$.rewrites'))
+                WHERE run_id = ${event.payload.id}`;
               break;
             }
             case "run.background-work-cancelled": {

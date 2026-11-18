@@ -36,7 +36,7 @@ export function useThreadFindPositionReader({
   readonly isWorking: boolean;
   readonly runlessWorkActive: boolean;
   readonly toolCallVisibility: ToolCallVisibility;
-  readonly rows: MessagesTimelineRow[];
+  readonly rows: ReadonlyArray<MessagesTimelineRow>;
   readonly contentInsetEndAdjustment: number;
 }) {
   // Layout effect so a find opened right after a thread switch reads this viewport.

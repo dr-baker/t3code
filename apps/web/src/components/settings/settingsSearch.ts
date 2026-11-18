@@ -717,6 +717,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     requiresThreadAutoSettlement: true,
   },
   {
+    id: "rewrite-council",
+    title: "Rewrite council",
+    to: "/settings/threads",
+    searchTerms: ["rewrites agents models reasoning effort"],
+  },
+  {
     id: "automatic-snooze-duration",
     title: "Automatic snooze duration",
     to: "/settings/threads",

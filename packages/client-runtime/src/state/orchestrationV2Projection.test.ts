@@ -218,6 +218,20 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     const next = applyOrchestrationV2ProjectionEvent(projection, event);
     expect(next?.visibleTurnItems).toBe(visibleTurnItems);
     expect(next?.visibleTurnItems[0]).toBe(visibleTurnItems[0]);
+    const rewrites = { candidates: [], selectedThreadId: null };
+    const choice = applyOrchestrationV2ProjectionEvent(next!, {
+      id: event.id,
+      threadId,
+      runId,
+      occurredAt: now,
+      type: "run.updated",
+      rewritesOnly: true,
+      payload: { ...run, status: "waiting", rewrites },
+    });
+    expect(choice?.runs[0]).toMatchObject({ status: "completed", rewrites });
+    expect(choice?.visibleTurnItems).toBe(visibleTurnItems);
+    const lateUpdate = applyOrchestrationV2ProjectionEvent(choice!, event);
+    expect(lateUpdate?.runs[0]?.rewrites).toEqual(rewrites);
   });
 
   it("replaces only the updated visible item and retains its deferred work cursor", () => {

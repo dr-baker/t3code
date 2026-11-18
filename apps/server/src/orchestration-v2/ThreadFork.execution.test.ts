@@ -7,6 +7,7 @@ import {
   EventId,
   MessageId,
   NodeId,
+  type OrchestrationV2TurnItem,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -26,8 +27,12 @@ import * as Statement from "effect/sql/Statement";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import {
+  CodexProviderCapabilitiesV2,
+  resolveCodexForkBoundary,
+} from "./Adapters/CodexAdapterV2.ts";
 import { ClaudeProviderCapabilitiesV2 } from "./Adapters/ClaudeAdapterV2.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -60,7 +65,7 @@ const forkCases = (
     { runEffectWorker: false },
   );
 
-  return { driver, status, instanceId, modelSelection, layer };
+  return { driver, status, instanceId, modelSelection, adapter, layer };
 });
 
 it.effect("a persisted fork leaves PR watching with its parent until explicitly opted in", () =>
@@ -665,6 +670,8 @@ const writeParentRun = (input: {
     | "failed"
     | "interrupted";
   readonly text: string;
+  readonly providerThreadId?: ProviderThreadId;
+  readonly nativeBoundary?: "recorded" | "missing";
   /** A checkpointed run on a native provider thread, which `latest_stable` forks start from. */
   readonly stable?: boolean;
 }) =>
@@ -673,12 +680,15 @@ const writeParentRun = (input: {
     const now = yield* DateTime.now;
     const { driver, instanceId, modelSelection } = forkCases[0]!;
     const messageId = MessageId.make(`${input.runId}:message`);
-    const providerThreadId = input.stable
-      ? ProviderThreadId.make(`${input.runId}:provider-thread`)
-      : null;
+    const providerThreadId =
+      input.providerThreadId ??
+      (input.stable ? ProviderThreadId.make(`${input.runId}:provider-thread`) : null);
+    const attemptId = RunAttemptId.make(`${input.runId}:attempt`);
+    const providerTurnId = ProviderTurnId.make(`${input.runId}:turn`);
+    const rootNodeId = NodeId.make(`${input.runId}:root`);
     yield* eventSink.write({
       events: [
-        ...(providerThreadId === null
+        ...(providerThreadId === null || input.providerThreadId !== undefined
           ? []
           : [
               {
@@ -723,8 +733,8 @@ const writeParentRun = (input: {
             modelSelection,
             providerThreadId,
             userMessageId: messageId,
-            rootNodeId: null,
-            activeAttemptId: null,
+            rootNodeId: input.nativeBoundary ? rootNodeId : null,
+            activeAttemptId: input.nativeBoundary ? attemptId : null,
             status: input.status,
             queuePosition: null,
             requestedAt: now,
@@ -744,6 +754,56 @@ const writeParentRun = (input: {
               : {}),
           },
         },
+        ...(input.nativeBoundary && providerThreadId
+          ? [
+              {
+                id: EventId.make(attemptId),
+                type: "run-attempt.created" as const,
+                threadId: input.threadId,
+                runId: input.runId,
+                occurredAt: now,
+                payload: {
+                  id: attemptId,
+                  runId: input.runId,
+                  attemptOrdinal: 1,
+                  rootNodeId,
+                  providerInstanceId: instanceId,
+                  providerThreadId,
+                  providerTurnId,
+                  reason: "initial" as const,
+                  status: "completed" as const,
+                  startedAt: now,
+                  completedAt: now,
+                },
+              },
+              ...(input.nativeBoundary === "recorded"
+                ? [
+                    {
+                      id: EventId.make(providerTurnId),
+                      type: "provider-turn.updated" as const,
+                      threadId: input.threadId,
+                      runId: input.runId,
+                      occurredAt: now,
+                      payload: {
+                        id: providerTurnId,
+                        providerThreadId,
+                        nodeId: rootNodeId,
+                        runAttemptId: attemptId,
+                        nativeTurnRef: {
+                          driver,
+                          nativeId: `${input.runId}:native-turn`,
+                          strength: "strong" as const,
+                        },
+                        ordinal: input.ordinal,
+                        status: "completed" as const,
+                        startedAt: now,
+                        completedAt: now,
+                      },
+                    },
+                  ]
+                : []),
+            ]
+          : []),
         {
           id: EventId.make(`${input.runId}:item`),
           type: "turn-item.updated",
@@ -881,6 +941,511 @@ const askSideChat = (
       creationSource: "web",
     });
   });
+
+function recordingForkAdapter(
+  adapter: ProviderAdapter.ProviderAdapterV2["Service"],
+  calls: {
+    readonly onStart: (turn: ProviderAdapter.ProviderAdapterV2TurnInput) => Effect.Effect<void>;
+    readonly onFork?: (
+      fork: ProviderAdapter.ProviderAdapterV2ForkThreadInput,
+    ) => Effect.Effect<void, ProviderAdapter.ProviderAdapterForkThreadError>;
+  },
+): ProviderAdapter.ProviderAdapterV2["Service"] {
+  const { instanceId, driver } = adapter;
+  return {
+    ...adapter,
+    openSession: (input) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const capabilities = yield* adapter.getCapabilities();
+        return {
+          instanceId,
+          driver,
+          providerSessionId: input.providerSessionId,
+          providerSession: {
+            id: input.providerSessionId,
+            driver,
+            providerInstanceId: instanceId,
+            status: "ready",
+            cwd: "/tmp/fork-test",
+            model: "test-model",
+            capabilities,
+            createdAt: now,
+            updatedAt: now,
+            lastError: null,
+          },
+          events: Stream.never,
+          ensureThread: ({ threadId, existingProviderThread }) =>
+            Effect.succeed({
+              ...existingProviderThread!,
+              appThreadId: threadId,
+              nativeThreadRef: { driver, nativeId: `fresh:${threadId}`, strength: "strong" },
+              status: "idle",
+              updatedAt: now,
+            }),
+          resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
+          startTurn: calls.onStart,
+          steerTurn: () => Effect.void,
+          interruptTurn: () => Effect.void,
+          respondToRuntimeRequest: () => Effect.void,
+          readThreadSnapshot: () => Effect.die("unused"),
+          rollbackThread: () => Effect.die("unused"),
+          forkThread: (fork) =>
+            (calls.onFork?.(fork) ?? Effect.void).pipe(
+              Effect.as({
+                ...fork.sourceProviderThread,
+                appThreadId: fork.targetThreadId,
+                nativeThreadRef: {
+                  driver,
+                  nativeId: `forked:${fork.targetThreadId}`,
+                  strength: "strong",
+                },
+                updatedAt: now,
+              }),
+            ),
+        } satisfies ProviderAdapter.ProviderAdapterV2SessionRuntime;
+      }),
+  };
+}
+
+type AnswerOutput =
+  | Pick<
+      Extract<OrchestrationV2TurnItem, { type: "assistant_message" }>,
+      "type" | "messageId" | "text" | "streaming"
+    >
+  | Pick<
+      Extract<OrchestrationV2TurnItem, { type: "dynamic_tool" }>,
+      "type" | "toolName" | "input" | "output"
+    >;
+
+const writeAnswer = Effect.fn("ThreadForkTest.writeAnswer")(function* (
+  threadId: ThreadId,
+  runId: RunId,
+  ordinal: number,
+  output: AnswerOutput,
+) {
+  const sink = yield* EventSink.EventSinkV2;
+  const now = yield* DateTime.now;
+  const id = `${runId}:answer:${ordinal}`;
+  yield* sink.write({
+    events: [
+      {
+        id: EventId.make(id),
+        type: "turn-item.updated",
+        threadId,
+        runId,
+        occurredAt: now,
+        payload: {
+          ...output,
+          id: TurnItemId.make(id),
+          threadId,
+          runId,
+          ordinal,
+          status: "completed",
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          title: null,
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+        },
+      },
+    ],
+  });
+});
+
+const assistantAnswer = (text: string, id: string) =>
+  ({
+    type: "assistant_message",
+    messageId: MessageId.make(id),
+    text,
+    streaming: false,
+  }) satisfies AnswerOutput;
+
+it.effect("a rewrite council starts atomically and brings only the chosen run back", () => {
+  const followUpStarted = Deferred.makeUnsafe<ProviderAdapter.ProviderAdapterV2TurnInput>();
+  const first = forkCases[0]!;
+  const second = forkCases[1]!;
+  const layer = ProviderReplayHarness.layerWithRegistry(
+    { name: "rewrite-selection" },
+    ProviderAdapterRegistry.layerFromAdapters([
+      recordingForkAdapter(first.adapter, {
+        onStart: (turn) => Deferred.succeed(followUpStarted, turn).pipe(Effect.asVoid),
+      }),
+      second.adapter,
+    ]),
+    { runEffectWorker: false },
+  );
+  return Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const sink = yield* EventSink.EventSinkV2;
+    const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+    const settings = yield* ServerSettingsService;
+    const threadId = ThreadId.make("rewrite-parent");
+    const runId = RunId.make("rewrite-source");
+    const projectId = ProjectId.make("side-chat-project");
+    const firstModel = first.modelSelection;
+    const secondModel = { ...second.modelSelection, options: [{ id: "effort", value: "high" }] };
+    yield* settings.updateSettings({
+      rewriteCouncil: [firstModel, secondModel],
+      projectSettingsOverrides: {
+        [projectId]: { providerInstances: { [second.instanceId]: { enabled: false } } },
+      },
+    });
+    yield* createParent(threadId);
+    yield* writeParentRun({
+      threadId,
+      runId,
+      ordinal: 1,
+      status: "completed",
+      text: "Original request",
+      stable: true,
+    });
+    yield* writeAnswer(
+      threadId,
+      runId,
+      101,
+      assistantAnswer("Original source answer", "original-answer"),
+    );
+    const laterRunId = RunId.make("later-source");
+    yield* writeParentRun({
+      threadId,
+      runId: laterRunId,
+      ordinal: 2,
+      status: "completed",
+      text: "LATER_SOURCE_SENTINEL",
+    });
+    yield* writeAnswer(
+      threadId,
+      laterRunId,
+      201,
+      assistantAnswer("LATER_ANSWER_SENTINEL", "later-answer"),
+    );
+    const base = { threadId, runId, createdBy: "user" as const, creationSource: "web" as const };
+    const start = (id: string) =>
+      orchestrator.dispatch({
+        ...base,
+        type: "thread.rewrites.start",
+        commandId: CommandId.make(id),
+      });
+    const select = (id: string, candidateThreadId: ThreadId | null) =>
+      orchestrator.dispatch({
+        ...base,
+        type: "thread.rewrites.select",
+        commandId: CommandId.make(id),
+        candidateThreadId,
+      });
+    const readParent = () => orchestrator.getThreadProjection(threadId);
+    const readRun = Effect.map(readParent(), (projection) =>
+      projection.runs.find((r) => r.id === runId)!,
+    );
+    const originalRun = yield* readRun;
+
+    const disabled = yield* start("disabled-seat").pipe(Effect.flip);
+    assert.include(String(disabled.cause), `${second.instanceId} is disabled`);
+    assert.isUndefined((yield* readRun).rewrites);
+    assert.isNull(yield* orchestrator.getThreadShell(ThreadId.make("rewrite-disabled-seat-1")));
+    yield* settings.updateSettings({
+      projectSettingsOverrides: {
+        [projectId]: { providerInstances: { [second.instanceId]: { enabled: true } } },
+      },
+    });
+    yield* Effect.all([start("generate"), start("concurrent-start")], { concurrency: "unbounded" });
+    const group = (yield* readRun).rewrites!;
+    assert.deepEqual(
+      group.candidates.map((c) => c.modelSelection),
+      [firstModel, secondModel],
+    );
+    const winningStart =
+      group.candidates[0]?.threadId === "rewrite-generate-1" ? "generate" : "concurrent-start";
+    const losingStart = winningStart === "generate" ? "concurrent-start" : "generate";
+    assert.isNull(yield* orchestrator.getThreadShell(ThreadId.make(`rewrite-${losingStart}-1`)));
+    yield* start("reopen");
+    assert.deepEqual((yield* readRun).rewrites, group);
+
+    const [textSeat, artifactSeat] = group.candidates;
+    assert.isDefined(textSeat);
+    assert.isDefined(artifactSeat);
+    for (const candidate of group.candidates) {
+      const child = yield* orchestrator.getThreadProjection(candidate.threadId);
+      assert.deepEqual(child.thread.forkedFrom, { threadId, type: "run", runId });
+      const history = child.contextHandoffs.find(
+        (h) => h.strategy === "full_thread_summary",
+      )?.history;
+      const text = history?.messages.map((message) => message.text).join("\n");
+      assert.include(text, "Original request");
+      assert.include(text, "Original source answer");
+      assert.notInclude(text, "_SENTINEL");
+      const run = child.runs.find((r) => r.id === candidate.runId)!;
+      assert.include(child.messages[0]!.text, "Skills used");
+      if (candidate === textSeat) {
+        yield* writeAnswer(
+          child.thread.id,
+          run.id,
+          2,
+          assistantAnswer("TEXT_SEAT_ANSWER", "text-seat-answer"),
+        );
+      } else {
+        yield* writeAnswer(child.thread.id, run.id, 2, {
+          type: "dynamic_tool",
+          toolName: "mcp__t3-code__send_to_user",
+          input: {},
+          output: { sentMessage: "SENT_ANSWER_TEXT" },
+        });
+        yield* writeAnswer(child.thread.id, run.id, 3, {
+          type: "dynamic_tool",
+          toolName: "mcp__t3-code__html_render",
+          input: {},
+          output: {
+            htmlRender: {
+              attachmentId: "selected-chart-attachment",
+              title: "Winner chart",
+              height: 300,
+            },
+          },
+        });
+      }
+      const now = yield* DateTime.now;
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make(candidate.threadId + ":finished"),
+            type: "run.updated",
+            threadId: child.thread.id,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...run, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      yield* select("select-" + candidate.threadId, candidate.threadId);
+      const parent = yield* readParent();
+      assert.deepEqual(
+        parent.contextTransfers
+          .filter((t) => t.type === "merge_back" && t.status === "pending")
+          .map((t) => [t.sourceThreadId, t.sourcePoint.runId]),
+        [[candidate.threadId, candidate.runId]],
+      );
+      assert.equal((yield* readRun).rewrites?.selectedThreadId, candidate.threadId);
+      assert.deepEqual(parent.thread.modelSelection, firstModel);
+    }
+    yield* select("restore", null);
+    const now = yield* DateTime.now;
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("late-run-update"),
+          type: "run.updated",
+          threadId,
+          runId,
+          occurredAt: now,
+          payload: originalRun,
+        },
+      ],
+    });
+    assert.isNull((yield* readRun).rewrites?.selectedThreadId);
+    assert.isFalse(
+      (yield* readParent()).contextTransfers.some(
+        (t) => t.type === "merge_back" && t.status === "pending",
+      ),
+    );
+
+    yield* select("choose-again", artifactSeat.threadId);
+    yield* askSideChat(threadId, "continue-after-rewrite", firstModel);
+    yield* worker.drain();
+    assert.isTrue(yield* Deferred.isDone(followUpStarted));
+    const delivered = JSON.stringify(yield* Deferred.await(followUpStarted));
+    assert.include(delivered, "SENT_ANSWER_TEXT");
+    assert.include(delivered, "selected-chart-attachment");
+    assert.notInclude(delivered, "TEXT_SEAT_ANSWER");
+    const continued = yield* readParent();
+    const followUp = continued.runs.find((r) => r.userMessageId === "continue-after-rewrite")!;
+    assert.isTrue(
+      continued.contextTransfers.some(
+        (t) =>
+          t.type === "merge_back" &&
+          t.sourcePoint.runId === artifactSeat.runId &&
+          t.targetRunId === followUp.id &&
+          t.status === "consumed",
+      ),
+    );
+    assert.deepEqual(followUp.modelSelection, firstModel);
+
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("finish-rewrite-follow-up"),
+          type: "run.updated",
+          threadId,
+          runId: followUp.id,
+          occurredAt: now,
+          payload: { ...followUp, status: "completed", completedAt: now },
+        },
+      ],
+    });
+    const laterChildRun = RunId.make("later-child-run");
+    yield* writeParentRun({
+      threadId: artifactSeat.threadId,
+      runId: laterChildRun,
+      ordinal: 2,
+      status: "completed",
+      text: "A separate Bring back",
+      stable: true,
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.merge_back",
+      commandId: CommandId.make("bring-back-later-child-run"),
+      sourceThreadId: artifactSeat.threadId,
+      targetThreadId: threadId,
+      sourcePoint: { type: "run", runId: laterChildRun },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* select("restore-after-follow-up", null);
+    assert.isNull((yield* readRun).rewrites?.selectedThreadId);
+    assert.isTrue(
+      (yield* readParent()).contextTransfers.some(
+        (t) =>
+          t.type === "merge_back" &&
+          t.sourceThreadId === artifactSeat.threadId &&
+          t.sourcePoint.runId === laterChildRun &&
+          t.status === "pending",
+      ),
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each(["recorded", "missing", "lost before startup"] as const)(
+  "starts rewrite turns with the selected source when the native boundary is %s",
+  (nativeBoundary) => {
+    const starts = new Map<ThreadId, ProviderAdapter.ProviderAdapterV2TurnInput>();
+    const nativeHistories = new Map<ThreadId, string[]>();
+    const native = forkCases[0]!;
+    const portable = forkCases[1]!;
+    let boundaryLost = false;
+    const threadId = ThreadId.make("rewrite-boundary-parent");
+    const runId = RunId.make("rewrite-boundary-first");
+    const laterRunId = RunId.make("rewrite-boundary-later");
+    const answers = new Map([
+      [`${runId}:native-turn`, "BOUNDARY_SOURCE_ANSWER"],
+      [`${laterRunId}:native-turn`, "LATER_TURN_SENTINEL"],
+    ]);
+    const recordStart = (start: ProviderAdapter.ProviderAdapterV2TurnInput) =>
+      Effect.sync(() => {
+        starts.set(start.threadId, start);
+      });
+    const layer = ProviderReplayHarness.layerWithRegistry(
+      { name: `rewrite-boundary-${nativeBoundary}` },
+      ProviderAdapterRegistry.layerFromAdapters([
+        recordingForkAdapter(native.adapter, {
+          onStart: recordStart,
+          onFork: (fork) =>
+            resolveCodexForkBoundary(fork).pipe(
+              Effect.map(({ lastTurnId }) => {
+                const turns = fork.sourceProviderTurns ?? [];
+                const boundary = turns.find((turn) => turn.nativeTurnRef?.nativeId === lastTurnId);
+                nativeHistories.set(
+                  fork.targetThreadId,
+                  turns
+                    .filter((turn) => !boundary || turn.ordinal <= boundary.ordinal)
+                    .flatMap((turn) => answers.get(turn.nativeTurnRef?.nativeId ?? "") ?? []),
+                );
+              }),
+            ),
+        }),
+        recordingForkAdapter(portable.adapter, { onStart: recordStart }),
+      ]),
+      {
+        runEffectWorker: false,
+        wrapProjectionStore: (store) => ({
+          ...store,
+          getThreadRecords: (id, fields, filter) =>
+            store.getThreadRecords(id, fields, filter).pipe(
+              Effect.map((projection) => {
+                if (!boundaryLost || id !== threadId || !("providerTurns" in projection))
+                  return projection;
+                return { ...projection, providerTurns: [] };
+              }),
+            ),
+        }),
+      },
+    );
+    return Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const settings = yield* ServerSettingsService;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      yield* settings.updateSettings({
+        rewriteCouncil: [native.modelSelection, portable.modelSelection],
+        projectSettingsOverrides: {
+          [ProjectId.make("side-chat-project")]: {
+            providerInstances: { [portable.instanceId]: { enabled: true } },
+          },
+        },
+      });
+      yield* createParent(threadId);
+      yield* writeParentRun({
+        threadId,
+        runId,
+        ordinal: 1,
+        status: "completed",
+        stable: true,
+        text: "Original request",
+        nativeBoundary: nativeBoundary === "missing" ? "missing" : "recorded",
+      });
+      yield* writeAnswer(
+        threadId,
+        runId,
+        101,
+        assistantAnswer("BOUNDARY_SOURCE_ANSWER", "boundary-answer"),
+      );
+      yield* writeParentRun({
+        threadId,
+        runId: laterRunId,
+        ordinal: 2,
+        status: "completed",
+        providerThreadId: ProviderThreadId.make(`${runId}:provider-thread`),
+        text: "Later request",
+        nativeBoundary: "recorded",
+      });
+      yield* writeAnswer(
+        threadId,
+        laterRunId,
+        201,
+        assistantAnswer("LATER_TURN_SENTINEL", "later-sentinel"),
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.rewrites.start",
+        commandId: CommandId.make("rewrite-boundary"),
+        threadId,
+        runId,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const parent = yield* orchestrator.getThreadProjection(threadId);
+      const candidates = parent.runs.find((run) => run.id === runId)?.rewrites?.candidates ?? [];
+      assert.lengthOf(candidates, 2);
+      boundaryLost = nativeBoundary === "lost before startup";
+      yield* worker.drain();
+      for (const candidate of candidates) {
+        const started = starts.get(candidate.threadId);
+        assert.isDefined(started);
+        const usesNativeFork =
+          nativeBoundary === "recorded" &&
+          candidate.modelSelection.instanceId === native.instanceId;
+        if (usesNativeFork) {
+          assert.deepEqual(nativeHistories.get(candidate.threadId), ["BOUNDARY_SOURCE_ANSWER"]);
+        } else {
+          assert.isFalse(nativeHistories.has(candidate.threadId));
+          assert.include(JSON.stringify(started), "BOUNDARY_SOURCE_ANSWER");
+          assert.notInclude(JSON.stringify(started), "LATER_TURN_SENTINEL");
+        }
+      }
+    }).pipe(Effect.provide(layer));
+  },
+);
 
 it.effect("resolves an explicit checkpoint fork to its source run", () =>
   Effect.gen(function* () {
@@ -1733,65 +2298,20 @@ const runForkWithFailingNativeSource = (forkFailures: number) => {
   const modelSelection = { instanceId, model: "test-model" };
   const started = Deferred.makeUnsafe<ProviderAdapter.ProviderAdapterV2TurnInput>();
   let forkCalls = 0;
-  const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
-    instanceId,
-    driver,
-    getCapabilities: () => Effect.succeed(ClaudeProviderCapabilitiesV2),
-    planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
-    openSession: (input) =>
-      Effect.gen(function* () {
-        const now = yield* DateTime.now;
-        return {
-          instanceId,
-          driver,
-          providerSessionId: input.providerSessionId,
-          providerSession: {
-            id: input.providerSessionId,
-            driver,
-            providerInstanceId: instanceId,
-            status: "ready",
-            cwd: "/tmp/fork-missing-native-source",
-            model: modelSelection.model,
-            capabilities: ClaudeProviderCapabilitiesV2,
-            createdAt: now,
-            updatedAt: now,
-            lastError: null,
-          },
-          events: Stream.never,
-          ensureThread: ({ threadId, existingProviderThread }) =>
-            Effect.succeed({
-              ...existingProviderThread!,
-              appThreadId: threadId,
-              nativeThreadRef: { driver, nativeId: "native-fresh-fork", strength: "strong" },
-              status: "idle",
-              updatedAt: now,
+  const adapter = recordingForkAdapter(forkCases[1]!.adapter, {
+    onStart: (turn) => Deferred.succeed(started, turn).pipe(Effect.asVoid),
+    onFork: ({ sourceProviderThread }) =>
+      ++forkCalls <= forkFailures
+        ? Effect.fail(
+            new ProviderAdapter.ProviderAdapterForkThreadError({
+              driver,
+              providerThreadId: sourceProviderThread.id,
+              cause:
+                "Session not found: native-deleted-source; authorization=BearerSyntheticSecret",
             }),
-          resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
-          startTurn: (turn) => Deferred.succeed(started, turn).pipe(Effect.asVoid),
-          steerTurn: () => Effect.void,
-          interruptTurn: () => Effect.void,
-          respondToRuntimeRequest: () => Effect.void,
-          readThreadSnapshot: () => Effect.die("unused"),
-          rollbackThread: () => Effect.die("unused"),
-          forkThread: ({ sourceProviderThread, targetThreadId }) =>
-            ++forkCalls <= forkFailures
-              ? Effect.fail(
-                  new ProviderAdapter.ProviderAdapterForkThreadError({
-                    driver,
-                    providerThreadId: sourceProviderThread.id,
-                    cause:
-                      "Session not found: native-deleted-source; authorization=BearerSyntheticSecret",
-                  }),
-                )
-              : Effect.succeed({
-                  ...sourceProviderThread,
-                  appThreadId: targetThreadId,
-                  nativeThreadRef: { driver, nativeId: "native-forked", strength: "strong" },
-                  updatedAt: now,
-                }),
-        } satisfies ProviderAdapter.ProviderAdapterV2SessionRuntime;
-      }),
-  };
+          )
+        : Effect.void,
+  });
   return Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const eventSink = yield* EventSink.EventSinkV2;

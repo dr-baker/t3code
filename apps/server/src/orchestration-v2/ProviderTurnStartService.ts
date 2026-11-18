@@ -1329,12 +1329,21 @@ export const layer: Layer.Layer<
           const sourceAttempt = sourceProjection.attempts.find(
             (candidate) => candidate.id === sourceRun?.activeAttemptId,
           );
-          const sourceProviderTurn =
-            latestProviderTurnForAttempt(sourceProjection.providerTurns, sourceAttempt?.id) ??
-            sourceProjection.providerTurns.find(
-              (candidate) => candidate.id === sourceAttempt?.providerTurnId,
-            );
-          if (sourceRun === undefined || sourceProviderThread === undefined) {
+          const sourceProviderTurn = projection.thread.lineage.rewrite
+            ? sourceProjection.providerTurns.find(
+                (candidate) =>
+                  candidate.id === providerThread.forkedFrom?.providerTurnId &&
+                  candidate.providerThreadId === sourceProviderThread?.id &&
+                  candidate.nativeTurnRef?.strength === "strong",
+              )
+            : (latestProviderTurnForAttempt(sourceProjection.providerTurns, sourceAttempt?.id) ??
+              sourceProjection.providerTurns.find(
+                (candidate) => candidate.id === sourceAttempt?.providerTurnId,
+              ));
+          if (
+            sourceRun === undefined ||
+            (!projection.thread.lineage.rewrite && sourceProviderThread === undefined)
+          ) {
             return yield* new ProviderTurnStartError({
               runId,
               cause: `Native fork transfer ${nativeForkTransfer.id} has no source provider execution.`,
@@ -1346,12 +1355,15 @@ export const layer: Layer.Layer<
           );
           let nativeForkFailure: string | undefined;
           if (
+            sourceProviderThread &&
             (sourceRun.status === "completed" || sourceRun.status === "waiting") &&
+            (!projection.thread.lineage.rewrite || sourceProviderTurn) &&
             (!sourceBusy ||
-              canForkBusySourceNatively(
-                session.providerSession.capabilities,
-                sourceProviderTurn?.nativeTurnRef != null,
-              ))
+              (!projection.thread.lineage.rewrite &&
+                canForkBusySourceNatively(
+                  session.providerSession.capabilities,
+                  sourceProviderTurn?.nativeTurnRef != null,
+                )))
           ) {
             // Rolled-back turns are no longer in the source conversation, so they cannot bound a fork.
             const rolledBackAttemptIds = new Set(
@@ -1412,9 +1424,10 @@ export const layer: Layer.Layer<
           const createdAt = yield* DateTime.now;
           const handoff = yield* contextHandoffService.prepareProviderHandoff({
             threadId: projection.thread.id,
+            sourceThreadId: nativeForkTransfer.sourceThreadId,
             targetRunId: run.id,
             transferId: nativeForkTransfer.id,
-            fromProviderThreadIds: [sourceProviderThread.id],
+            fromProviderThreadIds: sourceProviderThread ? [sourceProviderThread.id] : [],
             toProviderThreadId: providerThread.id,
             fromProviderInstanceId: sourceRun.providerInstanceId,
             toProviderInstanceId: run.providerInstanceId,

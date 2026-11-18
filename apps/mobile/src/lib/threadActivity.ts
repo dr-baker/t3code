@@ -1,3 +1,4 @@
+import type { OrchestrationV2Run } from "@t3tools/contracts";
 import type {
   ThreadPendingApproval,
   ThreadPendingUserInput,
@@ -217,6 +218,16 @@ export type ThreadFeedEntry = ThreadFeedEntryContent & {
 };
 
 type ThreadFeedEntryContent =
+  | {
+      readonly type: "rewrite";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly runId: RunId;
+      readonly group: OrchestrationV2Run["rewrites"];
+      readonly selected:
+        | NonNullable<OrchestrationV2Run["rewrites"]>["candidates"][number]
+        | undefined;
+    }
   | Extract<RawThreadFeedEntry, { type: "message" | "html-render" | "sent-message" | "mcp-app" }>
   | {
       readonly type: "activity-group";
