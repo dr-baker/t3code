@@ -1,3 +1,5 @@
+import type { OrchestrationV2Run } from "@t3tools/contracts";
+import { placeRewriteControls } from "@t3tools/client-runtime/state/thread-relationships";
 import type {
   ThreadPendingApproval,
   ThreadPendingUserInput,
@@ -216,7 +218,52 @@ export type ThreadFeedEntry = ThreadFeedEntryContent & {
   readonly checkpointSummary?: ThreadCheckpointSummary;
 };
 
+export function placeThreadFeedRewriteControls(
+  feed: ReadonlyArray<ThreadFeedEntry>,
+  runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "status" | "rewrites">>,
+  availableCandidates: ReadonlySet<ThreadId>,
+): ReadonlyArray<ThreadFeedEntry> {
+  return placeRewriteControls<ThreadFeedEntry>({
+    rows: feed,
+    runs,
+    availableCandidates,
+    describe: (row) => {
+      if (row.type === "message") {
+        return { runId: row.message.runId, answer: row.message.role === "assistant" };
+      }
+      return {
+        runId: row.runId,
+        answer:
+          row.type === "html-render" ||
+          row.type === "sent-message" ||
+          row.type === "mcp-app" ||
+          (row.type === "activity-group" &&
+            row.activities.length === 1 &&
+            row.activities[0]?.projectedItem.item.type === "proposed_plan"),
+      };
+    },
+    makeControl: (row, runId, group, selected) => ({
+      type: "rewrite",
+      id: `rewrite:${runId}`,
+      createdAt: row.createdAt,
+      runId,
+      group,
+      selected,
+    }),
+  });
+}
+
 type ThreadFeedEntryContent =
+  | {
+      readonly type: "rewrite";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly runId: RunId;
+      readonly group: OrchestrationV2Run["rewrites"];
+      readonly selected:
+        | NonNullable<OrchestrationV2Run["rewrites"]>["candidates"][number]
+        | undefined;
+    }
   | Extract<RawThreadFeedEntry, { type: "message" | "html-render" | "sent-message" | "mcp-app" }>
   | {
       readonly type: "activity-group";

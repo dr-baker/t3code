@@ -212,6 +212,11 @@ function summarizeDeltaItem(item: OrchestrationV2TurnItem): string | null {
       return `- User: ${compactText(item.text)}`;
     case "assistant_message":
       return `- Assistant: ${compactText(item.text)}`;
+    case "dynamic_tool":
+    case "proposed_plan": {
+      const message = historicalMessage(item);
+      return message === null ? null : `- Assistant: ${compactText(message.text)}`;
+    }
     case "command_execution":
       return `- Command: ${compactText(item.input)}`;
     case "file_change":

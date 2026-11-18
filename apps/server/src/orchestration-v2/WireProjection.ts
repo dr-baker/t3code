@@ -328,6 +328,9 @@ export function projectThreadProjectionForWire(
 export function projectDomainEventForWire(
   event: OrchestrationV2DomainEvent,
 ): OrchestrationV2DomainEvent {
+  // Older clients already understand run updates. Server lifecycle subscribers only see the stored event.
+  if (event.type === "run.rewrites-updated")
+    return { ...event, type: "run.updated", rewritesOnly: true };
   return event.type === "turn-item.updated"
     ? { ...event, payload: projectTurnItemForWire(event.payload) }
     : event.type === "context-handoff.updated"

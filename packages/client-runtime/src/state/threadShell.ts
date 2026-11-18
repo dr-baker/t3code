@@ -2,6 +2,7 @@ import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
 import type {
   EnvironmentId,
+  OrchestrationV2Run,
   OrchestrationV2ShellSnapshot,
   ProjectId,
   ScopedProjectRef,
@@ -207,7 +208,9 @@ export function childThreadInputsTitle(
 ): string {
   const approvals = children.filter((child) => child.hasPendingApprovals).length;
   const need = approvals === 0 ? "input" : approvals === children.length ? "approval" : "you";
-  const sideChats = children.filter((child) => child.lineage.sideChat === true).length;
+  const sideChats = children.filter(
+    (child) => child.lineage.sideChat === true && !child.lineage.rewrite,
+  ).length;
   const kind = sideChats === children.length ? "sideChat" : sideChats === 0 ? "subagent" : "thread";
   const count = children.length;
   if (count === 1) {
@@ -322,7 +325,8 @@ export function createEnvironmentThreadShellAtoms(input: {
       let byParent: Map<ThreadId, OrchestrationV2ThreadShell[]> | undefined;
       for (const thread of get(environmentThreadsAtom(environmentId))) {
         const parentId = thread.lineage.parentThreadId;
-        if (thread.lineage.sideChat !== true || parentId === null) continue;
+        if (thread.lineage.sideChat !== true || thread.lineage.rewrite || parentId === null)
+          continue;
         byParent ??= new Map();
         const siblings = byParent.get(parentId);
         if (siblings) siblings.push(thread);
@@ -482,6 +486,25 @@ export function createEnvironmentThreadShellAtoms(input: {
             get(pendingSubagentRequestsAtom(ref.environmentId)),
           );
     }).pipe(Atom.withLabel(`environment-thread-shell:${key}`));
+  });
+
+  const decodeThreadKeys = Schema.decodeUnknownSync(
+    Schema.fromJsonString(Schema.Array(Schema.String)),
+  );
+  const availableRewriteCandidatesAtomFamily = Atom.family((keys: string) => {
+    const candidates = decodeThreadKeys(keys).map((key) => ({
+      id: parseThreadKey(key).threadId,
+      shell: threadShellAtomFamily(key),
+    }));
+    let previous = new Set<ThreadId>();
+    return Atom.make((get) => {
+      const next = new Set<ThreadId>();
+      for (const { id, shell } of candidates) {
+        if (get(shell) !== null) next.add(id);
+      }
+      if (next.size !== previous.size || [...next].some((id) => !previous.has(id))) previous = next;
+      return previous;
+    });
   });
 
   // Keeps the previous shell while only streaming ticks changed. During a run,
@@ -801,6 +824,19 @@ export function createEnvironmentThreadShellAtoms(input: {
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),
     quietThreadShellAtom: (ref: ScopedThreadRef) => quietThreadShellAtomFamily(threadKey(ref)),
     childThreadInputsAtom: (ref: ScopedThreadRef) => childThreadInputsAtomFamily(threadKey(ref)),
+    availableRewriteCandidatesAtom: (
+      environmentId: EnvironmentId,
+      runs: ReadonlyArray<Pick<OrchestrationV2Run, "rewrites">>,
+    ) =>
+      availableRewriteCandidatesAtomFamily(
+        JSON.stringify(
+          runs.flatMap(({ rewrites }) =>
+            rewrites?.selectedThreadId
+              ? [threadKey({ environmentId, threadId: rewrites.selectedThreadId })]
+              : [],
+          ),
+        ),
+      ),
     sideChatsAtom: (ref: ScopedThreadRef) => sideChatsAtomFamily(threadKey(ref)),
   };
 }

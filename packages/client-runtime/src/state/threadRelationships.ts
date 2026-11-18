@@ -1,6 +1,8 @@
 import {
   isOrchestrationV2WorkActive,
+  type OrchestrationV2Run,
   type OrchestrationV2ThreadShell,
+  type RunId,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -87,6 +89,7 @@ export function deriveThreadRelationshipGraph(input: {
       ? [...threads, { ...selectedThread, activityRunStatus: null, status: null }]
       : threads;
   for (const thread of lineageThreads) {
+    if (thread.lineage.rewrite) continue;
     const parentThreadId =
       thread.forkedFrom?.type === "run"
         ? thread.forkedFrom.threadId
@@ -117,6 +120,11 @@ export function deriveThreadRelationshipGraph(input: {
       });
     }
     for (const transfer of input.projection.contextTransfers) {
+      if (
+        threadsById.get(transfer.sourceThreadId)?.lineage.rewrite ||
+        threadsById.get(transfer.targetThreadId)?.lineage.rewrite
+      )
+        continue;
       if (transfer.sourceThreadId === transfer.targetThreadId) continue;
       addEdge({
         sourceThreadId: transfer.sourceThreadId,
@@ -204,5 +212,45 @@ export function orderWebThreadLineageRows(input: {
       return rightCreatedAt - leftCreatedAt;
     }
     return left.threadId < right.threadId ? -1 : left.threadId > right.threadId ? 1 : 0;
+  });
+}
+
+export function placeRewriteControls<Row>(input: {
+  readonly rows: ReadonlyArray<Row>;
+  readonly runs: ReadonlyArray<
+    Pick<OrchestrationV2Run, "id"> & Partial<Pick<OrchestrationV2Run, "status" | "rewrites">>
+  >;
+  readonly availableCandidates: ReadonlySet<ThreadId>;
+  readonly describe: (row: Row) => { runId: RunId | null | undefined; answer: boolean };
+  readonly makeControl: (
+    row: Row,
+    runId: RunId,
+    group: OrchestrationV2Run["rewrites"],
+    selected: NonNullable<OrchestrationV2Run["rewrites"]>["candidates"][number] | undefined,
+  ) => Row;
+}): ReadonlyArray<Row> {
+  const runs = new Map(
+    input.runs
+      .filter((run) => run.status === "completed" || run.status === "waiting")
+      .map((run) => [run.id, run.rewrites]),
+  );
+  if (!runs.size) return input.rows;
+  const anchors = new Map<RunId, number>();
+  const descriptions = input.rows.map((row, index) => {
+    const description = input.describe(row);
+    if (description.runId && runs.has(description.runId)) anchors.set(description.runId, index);
+    return description;
+  });
+  return input.rows.flatMap((row, index) => {
+    const { runId, answer } = descriptions[index]!;
+    if (!runId || !anchors.has(runId)) return [row];
+    const group = runs.get(runId);
+    const selected =
+      group?.selectedThreadId && input.availableCandidates.has(group.selectedThreadId)
+        ? group.candidates.find((candidate) => candidate.threadId === group.selectedThreadId)
+        : undefined;
+    const output = answer && selected ? [] : [row];
+    if (anchors.get(runId) === index) output.push(input.makeControl(row, runId, group, selected));
+    return output;
   });
 }

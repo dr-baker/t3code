@@ -172,6 +172,7 @@ export const OrchestrationV2AppThreadLineage = Schema.Struct({
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   rootThreadId: ThreadId,
   sideChat: Schema.optional(Schema.Boolean),
+  rewrite: Schema.optional(Schema.Literal(true)),
 });
 export type OrchestrationV2AppThreadLineage = typeof OrchestrationV2AppThreadLineage.Type;
 
@@ -827,6 +828,14 @@ export const OrchestrationV2RunOutput = Schema.Struct({
 export type OrchestrationV2RunOutput = typeof OrchestrationV2RunOutput.Type;
 
 export const OrchestrationV2Run = Schema.Struct({
+  rewrites: Schema.optional(
+    Schema.Struct({
+      candidates: Schema.Array(
+        Schema.Struct({ threadId: ThreadId, runId: RunId, modelSelection: ModelSelection }),
+      ),
+      selectedThreadId: Schema.NullOr(ThreadId),
+    }),
+  ),
   id: RunId,
   threadId: ThreadId,
   ordinal: PositiveInt,
@@ -2210,6 +2219,12 @@ export const OrchestrationV2DomainEvent = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
     type: Schema.Literal("run.updated"),
+    rewritesOnly: Schema.optionalKey(Schema.Literal(true)),
+    payload: OrchestrationV2Run,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("run.rewrites-updated"),
     payload: OrchestrationV2Run,
   }),
   Schema.Struct({
@@ -3195,6 +3210,12 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2JsonEventBaseFields,
     type: Schema.Literal("run.updated"),
+    rewritesOnly: Schema.optionalKey(Schema.Literal(true)),
+    payload: OrchestrationV2RunJson,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2JsonEventBaseFields,
+    type: Schema.Literal("run.rewrites-updated"),
     payload: OrchestrationV2RunJson,
   }),
   Schema.Struct({
@@ -3770,6 +3791,21 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     scopeId: CheckpointScopeId,
     checkpointId: CheckpointId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.rewrites.start"),
+    ...OrchestrationV2CreationFields,
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.rewrites.select"),
+    ...OrchestrationV2CreationFields,
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    candidateThreadId: Schema.NullOr(ThreadId),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.fork"),
@@ -4404,6 +4440,7 @@ export const OrchestrationV2ThreadHistoryPage = withRecordIdTable(
         item: ForwardCompatibleUnion(OrchestrationV2TurnItem.members, "type"),
       })),
     ),
+    runs: Schema.optionalKey(Schema.Array(OrchestrationV2Run)),
     nextCursor: Schema.NullOr(TrimmedNonEmptyString),
     hasMoreHistory: Schema.Boolean,
     /** Records of the page's subagent items, which a bounded snapshot can omit. */

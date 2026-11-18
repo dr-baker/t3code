@@ -87,6 +87,7 @@ import {
 } from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
 import { Button } from "../ui/button";
+import { RewriteCouncilSettings } from "./RewriteCouncilSettings";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -2467,6 +2468,9 @@ export function ThreadsSettingsPanel() {
         </SettingsSection>
       ) : null}
 
+      {!isProjectScope ? (
+        <RewriteCouncilSettings environmentId={environmentId} providers={serverProviders} />
+      ) : null}
       <SettingsSection id="text-generation" title={gt("Text generation")}>
         <SettingsRow
           serverScoped

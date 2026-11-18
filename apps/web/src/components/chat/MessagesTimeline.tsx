@@ -1,7 +1,11 @@
 import { T, useGT, useMessages, Var } from "gt-react";
 import type { SideThreadOpenIntent } from "@t3tools/client-runtime/side-thread";
 import { threadErrorText } from "@t3tools/client-runtime/state/threads";
-import { threadEnvironment } from "../../state/threads";
+import { useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
+import { placeRewriteControls } from "@t3tools/client-runtime/state/thread-relationships";
+import { RewriteButton, RewriteOutput } from "./Rewrites";
+import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
 import { AudioPreviewUnmountContext } from "../files/AudioPreview";
@@ -27,6 +31,8 @@ import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/s
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import { observeResize } from "~/lib/observeResize";
 import { useStableCallback } from "~/hooks/useStableCallback";
+
+const EMPTY_REWRITE_CANDIDATES = Atom.make(new Set<ThreadId>());
 
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const EMPTY_PENDING_APPROVALS: ReadonlyArray<PendingApproval> = [];
@@ -101,6 +107,7 @@ import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { cn } from "~/lib/utils";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
+import type { OrchestrationV2Run } from "@t3tools/contracts";
 import { type HandoffTimelineRun } from "./V2LifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
@@ -311,7 +318,10 @@ interface MessagesTimelineProps {
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
   skills?: ReadonlyArray<ServerProviderSkill>;
-  runs: ReadonlyArray<HandoffTimelineRun>;
+  rewritesEnabled?: boolean;
+  runs: ReadonlyArray<
+    HandoffTimelineRun & Partial<Pick<OrchestrationV2Run, "status" | "rewrites">>
+  >;
   anchorMessageId: MessageId | null;
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
@@ -414,6 +424,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   workspaceRoot,
   skills = EMPTY_TIMELINE_SKILLS,
   runs: runsProp,
+  rewritesEnabled = false,
   anchorMessageId,
   onAnchorReady,
   onAnchorSizeChanged,
@@ -763,7 +774,57 @@ const ConversationTimeline = memo(function ConversationTimeline({
     toolCallVisibility,
     revealedMessageId,
   });
-  const rows = useStableRows(rawRows, listIdentityKey);
+  const stableRows = useStableRows(rawRows, listIdentityKey);
+  const rewriteThreadRef = rewritesEnabled ? citationThreadRef : null;
+  const availableRewriteCandidates = useAtomValue(
+    rewriteThreadRef
+      ? environmentThreadShells.availableRewriteCandidatesAtom(
+          rewriteThreadRef.environmentId,
+          runsProp,
+        )
+      : EMPTY_REWRITE_CANDIDATES,
+  );
+  const rows = (() => {
+    if (!rewritesEnabled) return stableRows;
+    const outputRunIds = new Map(
+      timelineEntries.flatMap((entry) => {
+        switch (entry.kind) {
+          case "html-render":
+          case "mcp-app":
+          case "sent-message":
+            return [[entry.id, entry.runId] as const];
+          case "proposed-plan":
+            return [[entry.id, entry.proposedPlan.runId] as const];
+          default:
+            return [];
+        }
+      }),
+    );
+    return placeRewriteControls<MessagesTimelineRow>({
+      rows: stableRows,
+      runs: runsProp,
+      availableCandidates: availableRewriteCandidates,
+      describe: (row) => {
+        if (row.kind === "message" || row.kind === "assistant-meta") {
+          return { runId: row.message.runId, answer: row.message.role === "assistant" };
+        }
+        if (row.kind === "event") return { runId: row.projectedItem.item.runId, answer: false };
+        if (row.kind === "work") return { runId: row.groupedEntries.at(-1)?.runId, answer: false };
+        if (row.kind === "turn-fold" || row.kind === "attempt-fold" || row.kind === "work-toggle") {
+          return { runId: row.runId, answer: false };
+        }
+        return { runId: outputRunIds.get(row.id), answer: outputRunIds.has(row.id) };
+      },
+      makeControl: (row, runId, group, selected) => ({
+        kind: "rewrite",
+        id: `rewrite:${runId}`,
+        createdAt: row.createdAt,
+        runId,
+        group,
+        selected,
+      }),
+    });
+  })();
   const matchedApprovalRequestIds = new Set<string>();
   for (const row of pendingApprovalRequestIds.size > 0 ? rows : []) {
     const entries =
@@ -1701,6 +1762,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "message" && row.message.role === "assistant" ? (
         <AssistantTimelineRow row={row} />
       ) : null}
+      {row.kind === "rewrite" ? <TurnRewriteRow row={row} /> : null}
       {row.kind === "assistant-meta" ? <AssistantMetaTimelineRow row={row} /> : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "html-render" ? <HtmlRenderTimelineRow row={row} /> : null}
@@ -1713,6 +1775,23 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     </div>
   );
 });
+
+function TurnRewriteRow({ row }: { row: Extract<TimelineRow, { kind: "rewrite" }> }) {
+  const { threadRef } = use(TimelineRowCtx);
+  if (!threadRef) return null;
+  return (
+    <div className="space-y-2">
+      {row.selected && (
+        <RewriteOutput
+          threadRef={{ ...threadRef, threadId: row.selected.threadId }}
+          runId={row.selected.runId}
+          attribution={row.selected.modelSelection}
+        />
+      )}
+      <RewriteButton threadRef={threadRef} runId={row.runId} group={row.group} />
+    </div>
+  );
+}
 
 function WorktreeSetupTimelineRow({
   row,

@@ -68,6 +68,24 @@ function getProviderOptionBooleanSelectionValue(
   return typeof value === "boolean" ? value : undefined;
 }
 
+export function rewriteCouncilSeats(council: ReadonlyArray<ModelSelection>) {
+  const occurrences = new Map<string, number>();
+  return council.map((selection) => {
+    const modelKey = JSON.stringify([selection.instanceId, selection.model]);
+    const occurrence = (occurrences.get(modelKey) ?? 0) + 1;
+    occurrences.set(modelKey, occurrence);
+    return { selection, key: modelKey + "/" + occurrence };
+  });
+}
+
+export function rewriteModelLabel(selection: ModelSelection): string {
+  const options =
+    selection.options?.flatMap((option) =>
+      typeof option.value === "string" ? [option.value] : [],
+    ) ?? [];
+  return [selection.model, ...options].join(" · ");
+}
+
 export function getModelSelectionStringOptionValue(
   modelSelection: ModelSelection | null | undefined,
   id: string,

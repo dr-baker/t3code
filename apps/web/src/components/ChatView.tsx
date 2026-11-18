@@ -3626,6 +3626,13 @@ export default function ChatView(props: ChatViewProps) {
                   isPreparingWorktree={isPreparingWorktree}
                   footer={timelineFooter}
                   listRef={legendListRef}
+                  rewritesEnabled={
+                    serverConfig?.environment.capabilities.rewrites === true &&
+                    !embedded &&
+                    !activeThread?.lineage.sideChat &&
+                    !isSubagentThread &&
+                    isServerThread
+                  }
                   runs={serverProjection?.runs ?? []}
                   latestRun={activeActivityRun}
                   announcedRun={announcedRun(activeActivityRun, serverProjection?.runs ?? [])}

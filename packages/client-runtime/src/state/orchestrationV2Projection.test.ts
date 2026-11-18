@@ -19,6 +19,7 @@ import {
 import * as DateTime from "effect/DateTime";
 
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
+import { resolvePendingHandoff } from "../handoff.ts";
 
 const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
 const threadId = ThreadId.make("thread-reducer");
@@ -218,6 +219,57 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     const next = applyOrchestrationV2ProjectionEvent(projection, event);
     expect(next?.visibleTurnItems).toBe(visibleTurnItems);
     expect(next?.visibleTurnItems[0]).toBe(visibleTurnItems[0]);
+    const rewrites = { candidates: [], selectedThreadId: null };
+    const choice = applyOrchestrationV2ProjectionEvent(next!, {
+      id: event.id,
+      threadId,
+      runId,
+      occurredAt: now,
+      type: "run.updated",
+      rewritesOnly: true,
+      payload: { ...run, status: "waiting", rewrites },
+    });
+    expect(choice?.runs[0]).toMatchObject({ status: "completed", rewrites });
+    expect(choice?.visibleTurnItems).toBe(visibleTurnItems);
+    const lateUpdate = applyOrchestrationV2ProjectionEvent(choice!, event);
+    expect(lateUpdate?.runs[0]?.rewrites).toEqual(rewrites);
+
+    const latestRun = { ...run, id: RunId.make("latest-run"), ordinal: 101 };
+    const latestItem = { ...item, runId: latestRun.id };
+    const selectedThreadId = ThreadId.make("historical-winner");
+    const historicalChoice = applyOrchestrationV2ProjectionEvent(
+      {
+        ...projection,
+        runs: [latestRun],
+        turnItems: [latestItem],
+        visibleTurnItems: [{ ...visibleTurnItems[0]!, item: latestItem }],
+      },
+      {
+        id: event.id,
+        threadId,
+        runId,
+        occurredAt: now,
+        type: "run.rewrites-updated",
+        payload: {
+          ...run,
+          providerInstanceId: ProviderInstanceId.make("claude"),
+          modelSelection: { instanceId: ProviderInstanceId.make("claude"), model: "haiku" },
+          rewrites: {
+            candidates: [
+              {
+                threadId: selectedThreadId,
+                runId: RunId.make("historical-winner-run"),
+                modelSelection: latestRun.modelSelection,
+              },
+            ],
+            selectedThreadId,
+          },
+        },
+      },
+    );
+    expect(historicalChoice?.runs.map(({ ordinal }) => ordinal)).toEqual([1, 101]);
+    expect(historicalChoice?.runs[0]?.rewrites?.selectedThreadId).toBe(selectedThreadId);
+    expect(resolvePendingHandoff(historicalChoice, latestRun.modelSelection, [])).toBeNull();
   });
 
   it("replaces only the updated visible item and retains its deferred work cursor", () => {

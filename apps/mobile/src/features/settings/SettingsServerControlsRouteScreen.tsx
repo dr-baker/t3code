@@ -43,6 +43,7 @@ import {
   type ScopedMobileSettingsTarget,
 } from "./settings-scoped-server";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
+import { MobileRewriteCouncil } from "./MobileRewriteCouncil";
 import { AutoSettleSettingsRows } from "./ThreadSettingsSections";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 
@@ -420,6 +421,22 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     />
                   </SettingsSection>
                 ) : null}
+                {!projectSelected &&
+                  reference?.environment.serverConfig.environment.capabilities.rewrites &&
+                  (targets.length === 1 ? (
+                    <MobileRewriteCouncil
+                      environmentId={reference.environment.environmentId}
+                      council={reference.settings.rewriteCouncil}
+                      disabled={disabledFor("rewriteCouncil")}
+                      onChange={(rewriteCouncil) => write({ rewriteCouncil })}
+                    />
+                  ) : (
+                    <SettingsSection title="Rewrite council">
+                      <Text className="p-3 text-sm text-foreground-muted">
+                        Select an environment to configure its council.
+                      </Text>
+                    </SettingsSection>
+                  ))}
                 <AutoSettleSettingsRows write={write} pending={pendingWrites > 0} />
               </>
             ) : null}

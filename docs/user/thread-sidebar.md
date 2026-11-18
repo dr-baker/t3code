@@ -382,6 +382,17 @@ unarchiving the thread brings them back.
 On mobile, a thread lists its side chats above the composer. Tap one to open it and
 answer its questions.
 
+## Rewrites
+
+Choose the models and reasoning effort in **Settings → Threads → Rewrite council**. Select
+**Rewrites** on a finished answer to have each member answer the original request independently.
+Switch between the original and the council members to read their answers and visualizations.
+
+**Use this rewrite** displays that answer in the thread and brings its context into your next
+message. Reopen **Rewrites** to switch answers or choose **Original → Use original**. Switching
+before sending a message updates which answer is brought back. Messages already sent keep their
+original context.
+
 ## Watch another thread
 
 In a thread's details, add a **Thread watch** to be notified when another thread on the same server finishes, fails, stops, or needs input. The watch can end when its current work finishes or stay active until the watched thread is settled. It survives closing the client and restarting the server.

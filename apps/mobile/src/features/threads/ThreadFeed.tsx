@@ -8,6 +8,9 @@ import { Sheet } from "../../components/ui/Sheet";
 import { ListActionRow } from "../../components/ui/ListActionRow";
 import { ListSection } from "../../components/ui/ListSection";
 import { collectMobileAssistantTextSelectors } from "../../lib/assistantCitationSelection";
+import { useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
+import { MobileRewrites } from "./MobileRewrites";
 import { TurnCostButton } from "./TurnCostButton";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
@@ -239,6 +242,7 @@ import {
 } from "../../lib/markdownLinks";
 import {
   createThreadFeedCache,
+  placeThreadFeedRewriteControls,
   threadFeedCompactionLabels,
   failedFeedRunIds,
   deriveThreadFeedPresentation,
@@ -2177,6 +2181,39 @@ function renderFeedEntry(
     );
   }
 
+  if (entry.type === "rewrite") {
+    return (
+      <MobileRewrites
+        threadRef={{ environmentId: props.environmentId, threadId: props.threadId }}
+        runId={entry.runId}
+        group={entry.group}
+        adopted={entry.selected}
+        width={props.markdownContentWidth}
+        iconColor={iconSubtleColor}
+        renderAttachments={(files) => (
+          <MessageAttachmentList
+            attachments={files}
+            environmentId={props.environmentId}
+            onPressPreview={props.onPressPreview}
+            onPlaybackStart={props.onPlaybackStart}
+          />
+        )}
+        renderText={(text) => (
+          <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
+            <AssistantMarkdownContent
+              markdown={renderAssistantCitationsAsText(text)}
+              environmentId={props.environmentId}
+              markdownStyles={markdownStyles.assistant}
+              linkHandlers={props.markdownLinkHandlers}
+              onUseArtifactTemplate={props.onUseArtifactTemplate}
+              renderImage={props.renderMarkdownImage}
+              skills={props.skills}
+            />
+          </MarkdownImageAvailableWidthContext>
+        )}
+      />
+    );
+  }
   if (entry.type === "work-toggle") {
     return (
       <ThreadWorkGroupToggle
@@ -3170,6 +3207,8 @@ const THREAD_FEED_MAINTAIN_SCROLL_AT_END = {
 // A thread switch remounts the feed. Starting from the last split pane's size lays rows out once,
 // instead of at width 0 and again when the new feed's own layout reports the same width.
 let lastSplitViewport: { windowWidth: number; width: number; height: number } | null = null;
+const EMPTY_REWRITE_CANDIDATES = Atom.make(new Set<ThreadId>());
+const EMPTY_REWRITE_PARENT = Atom.make(null);
 
 export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const gt = useGT();
@@ -3921,15 +3960,38 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     setInteractionState((current) => ({ ...current, revealedMessageId: jumpToMessageId }));
   }
   const [appendPendingTurn] = useState(createPendingTurnAppender);
-  const presentedFeed = appendGuestPendingMessages(
-    appendPendingTurn(
-      useThreadFeedPresentation(props, expandedTurnIds, expandedWorkGroups, revealedMessageId),
-      { zen: props.toolCallVisibility === "zen" },
-      m,
-    ),
-    guestShare,
+  const feed = appendPendingTurn(
+    useThreadFeedPresentation(props, expandedTurnIds, expandedWorkGroups, revealedMessageId),
+    { zen: props.toolCallVisibility === "zen" },
     m,
   );
+  const rewritesEnabled =
+    useAtomValue(serverEnvironment.configValueAtom(props.environmentId))?.environment.capabilities
+      .rewrites === true;
+  const rewriteParent = useAtomValue(
+    rewritesEnabled && props.detailRef
+      ? environmentThreadDetails.quietThreadAtom(props.detailRef)
+      : EMPTY_REWRITE_PARENT,
+  )?.projection;
+  const availableRewriteCandidates = useAtomValue(
+    rewriteParent && props.detailRef
+      ? environmentThreadShells.availableRewriteCandidatesAtom(
+          props.environmentId,
+          rewriteParent.runs,
+        )
+      : EMPTY_REWRITE_CANDIDATES,
+  );
+  const rewriteFeed = useMemo(() => {
+    if (
+      !rewriteParent ||
+      rewriteParent.thread.lineage.sideChat ||
+      rewriteParent.thread.lineage.relationshipToParent === "subagent" ||
+      rewriteParent.thread.delegatedFrom
+    )
+      return feed;
+    return placeThreadFeedRewriteControls(feed, rewriteParent.runs, availableRewriteCandidates);
+  }, [availableRewriteCandidates, feed, rewriteParent]);
+  const presentedFeed = appendGuestPendingMessages(rewriteFeed, guestShare, m);
   const pendingFoldMessageId =
     presentedFeed.findLast((entry) => entry.type === "pending-fold")?.messageId ?? null;
   const jumpRunId =

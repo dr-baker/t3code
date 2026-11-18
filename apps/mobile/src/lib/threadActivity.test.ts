@@ -5,6 +5,7 @@ import {
   CheckpointScopeId,
   RuntimeRequestId,
   NodeId,
+  PlanId,
   ProviderInstanceId,
   ProviderDriverKind,
   ProviderThreadId,
@@ -30,6 +31,7 @@ import {
   createThreadFeedCache,
   deriveThreadFeedPresentation,
   messageFoldRunId,
+  placeThreadFeedRewriteControls,
   type ThreadFeedCache,
   type ThreadFeedEntry,
   type ThreadFeedLatestRun,
@@ -107,10 +109,10 @@ it("keeps historical plan detail accessible from its paged turn item", () => {
   const item = {
     ...base("historical-plan", "2026-08-29T00:00:00.000Z", 1),
     type: "proposed_plan",
-    planId: "plan-historical",
+    planId: PlanId.make("plan-historical"),
     markdown: "Full historical plan text",
     streaming: false,
-  } as OrchestrationV2TurnItem;
+  } satisfies OrchestrationV2TurnItem;
 
   const entries = buildThreadFeed([projected(item, 0)]);
   const activity = entries.flatMap((entry) =>
@@ -137,6 +139,29 @@ it("keeps historical plan detail accessible from its paged turn item", () => {
     "message",
   ]);
   expect(presented[2]).toMatchObject({ activities: [{ projectedItem: { item } }] });
+
+  const planOnly = buildThreadFeed([projected(userMessage(), 0), projected(item, 1)]);
+  const candidate = {
+    threadId: ThreadId.make("plan-rewrite-child"),
+    runId: RunId.make("plan-rewrite-run"),
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+  };
+  const sourceRun = {
+    id: runId,
+    status: "completed" as const,
+    rewrites: { candidates: [candidate], selectedThreadId: candidate.threadId },
+  };
+  const available = new Set([candidate.threadId]);
+  expect(placeThreadFeedRewriteControls(planOnly, [sourceRun], available)).toMatchObject([
+    { type: "message" },
+    { type: "rewrite", selected: candidate },
+  ]);
+  const restored = { ...sourceRun, rewrites: { ...sourceRun.rewrites, selectedThreadId: null } };
+  expect(placeThreadFeedRewriteControls(planOnly, [restored], available)).toMatchObject([
+    { type: "message" },
+    { type: "activity-group", activities: [{ projectedItem: { item } }] },
+    { type: "rewrite", selected: undefined },
+  ]);
 });
 
 it("shows a compact command as one mobile divider before, during, and after compaction", () => {
