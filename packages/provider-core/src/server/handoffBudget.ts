@@ -19,6 +19,7 @@ import {
 
 export const DEFAULT_HANDOFF_TOKEN_CAP = 16_000;
 const HANDOFF_BYTE_CAP = 64_000;
+const MAX_HISTORY_ATTACHMENT_REFERENCES = 8;
 export const handoffTokenCapConfig = Config.Int("T3CODE_CONTEXT_HANDOFF_TOKEN_CAP").pipe(
   Config.withDefault(DEFAULT_HANDOFF_TOKEN_CAP),
   Config.map((value) => Math.max(1_024, Math.min(HANDOFF_BYTE_CAP, value))),
@@ -143,11 +144,14 @@ export function historicalMessage(
   let text: string;
   switch (item.type) {
     case "user_message":
-      text = withMessageSenderNote(item, item.text);
+    case "assistant_message": {
+      const body = item.type === "user_message" ? withMessageSenderNote(item, item.text) : item.text;
+      const references = (item.attachments ?? [])
+        .slice(0, MAX_HISTORY_ATTACHMENT_REFERENCES)
+        .map((attachment) => `Attachment ${JSON.stringify(attachment.name)} (ID ${attachment.id})`);
+      text = body ? [body, ...references].join("\n") : references.join("\n");
       break;
-    case "assistant_message":
-      text = item.text;
-      break;
+    }
     case "dynamic_tool": {
       if (item.status !== "completed") return null;
       const sent = sentMessageFromToolItem(item);

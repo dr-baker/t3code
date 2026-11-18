@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  type ChatAttachment,
   CheckpointId,
   CheckpointRef,
   CheckpointScopeId,
@@ -681,6 +682,7 @@ const writeParentRun = (input: {
     | "failed"
     | "interrupted";
   readonly text: string;
+  readonly attachments?: ReadonlyArray<ChatAttachment>;
   readonly providerThreadId?: ProviderThreadId;
   readonly nativeBoundary?: "recorded" | "missing";
   /** A checkpointed run on a native provider thread, which `latest_stable` forks start from. */
@@ -842,7 +844,7 @@ const writeParentRun = (input: {
             inputIntent: "turn_start",
             messageId,
             text: input.text,
-            attachments: [],
+            attachments: input.attachments ?? [],
           },
         },
       ],
@@ -1022,7 +1024,7 @@ function recordingForkAdapter(
 type AnswerOutput =
   | Pick<
       Extract<OrchestrationV2TurnItem, { type: "assistant_message" }>,
-      "type" | "messageId" | "text" | "streaming"
+      "type" | "messageId" | "text" | "streaming" | "attachments"
     >
   | Pick<
       Extract<OrchestrationV2TurnItem, { type: "dynamic_tool" }>,
@@ -1103,8 +1105,9 @@ it.effect("a rewrite council starts atomically and brings only the chosen run ba
     const projectId = ProjectId.make("side-chat-project");
     const firstModel = first.modelSelection;
     const secondModel = { ...second.modelSelection, options: [{ id: "effort", value: "high" }] };
+    const thirdModel = { ...firstModel, model: "attachment-model" };
     yield* settings.updateSettings({
-      rewriteCouncil: [firstModel, secondModel],
+      rewriteCouncil: [firstModel, secondModel, thirdModel],
       projectSettingsOverrides: {
         [projectId]: { providerInstances: { [second.instanceId]: { enabled: false } } },
       },
@@ -1171,7 +1174,7 @@ it.effect("a rewrite council starts atomically and brings only the chosen run ba
     const group = (yield* readRun).rewrites!;
     assert.deepEqual(
       group.candidates.map((c) => c.modelSelection),
-      [firstModel, secondModel],
+      [firstModel, secondModel, thirdModel],
     );
     const winningStart =
       group.candidates[0]?.threadId === "rewrite-generate-1" ? "generate" : "concurrent-start";
@@ -1180,9 +1183,10 @@ it.effect("a rewrite council starts atomically and brings only the chosen run ba
     yield* start("reopen");
     assert.deepEqual((yield* readRun).rewrites, group);
 
-    const [textSeat, artifactSeat] = group.candidates;
+    const [textSeat, artifactSeat, attachmentSeat] = group.candidates;
     assert.isDefined(textSeat);
     assert.isDefined(artifactSeat);
+    assert.isDefined(attachmentSeat);
     for (const candidate of group.candidates) {
       const child = yield* orchestrator.getThreadProjection(candidate.threadId);
       assert.deepEqual(child.thread.forkedFrom, { threadId, type: "run", runId });
@@ -1202,6 +1206,19 @@ it.effect("a rewrite council starts atomically and brings only the chosen run ba
           2,
           assistantAnswer("TEXT_SEAT_ANSWER", "text-seat-answer"),
         );
+      } else if (candidate === attachmentSeat) {
+        yield* writeAnswer(child.thread.id, run.id, 2, {
+          ...assistantAnswer("", "attachment-only-answer"),
+          attachments: [
+            {
+              type: "file",
+              id: "rewrite-winner-file",
+              name: "winner.pdf",
+              mimeType: "application/pdf",
+              sizeBytes: 24,
+            },
+          ],
+        });
       } else {
         yield* writeAnswer(child.thread.id, run.id, 2, {
           type: "dynamic_tool",
@@ -1303,6 +1320,16 @@ it.effect("a rewrite council starts atomically and brings only the chosen run ba
         ],
       });
     yield* finishParentRun(followUp);
+    yield* select("choose-attachment-only", attachmentSeat.threadId);
+    yield* askSideChat(threadId, "continue-after-attachment", firstModel);
+    yield* worker.drain();
+    const attachmentInput = starts.get(MessageId.make("continue-after-attachment"));
+    assert.isDefined(attachmentInput);
+    assert.include(attachmentInput.message.text, "rewrite-winner-file");
+    assert.include(attachmentInput.message.text, "winner.pdf");
+    yield* finishParentRun(
+      (yield* readParent()).runs.find((run) => run.id === attachmentInput.runId)!,
+    );
 
     yield* select("choose-before-deletion", textSeat.threadId);
     yield* orchestrator.dispatch({
@@ -1467,6 +1494,15 @@ it.effect.each(["recorded", "missing", "lost before startup"] as const)(
         status: "completed",
         stable: true,
         text: "Original request",
+        attachments: [
+          {
+            type: "file",
+            id: "historical-input-doc",
+            name: "source.csv",
+            mimeType: "text/csv",
+            sizeBytes: 42,
+          },
+        ],
         nativeBoundary: nativeBoundary === "missing" ? "missing" : "recorded",
       });
       yield* writeAnswer(
@@ -1520,6 +1556,8 @@ it.effect.each(["recorded", "missing", "lost before startup"] as const)(
         } else {
           assert.isFalse(nativeHistories.has(candidate.threadId));
           assert.include(JSON.stringify(started), "BOUNDARY_SOURCE_ANSWER");
+          assert.include(started.message.text, "historical-input-doc");
+          assert.include(started.message.text, "source.csv");
           assert.notInclude(JSON.stringify(started), "LATER_TURN_SENTINEL");
         }
       }
