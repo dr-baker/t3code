@@ -4108,6 +4108,16 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         },
       });
 
+      const rewriteSourceRunId = RunId.make("run:bounded-sql-history:450");
+      const rewriteCandidate = {
+        threadId: ThreadId.make("thread:bounded-sql-history:rewrite"),
+        runId: RunId.make("run:bounded-sql-history:rewrite"),
+        modelSelection,
+      };
+      const rewrites = {
+        candidates: [rewriteCandidate],
+        selectedThreadId: rewriteCandidate.threadId,
+      };
       for (let ordinal = 1; ordinal <= 1_000; ordinal += 1) {
         const id = `turn-item:bounded-sql-history:${ordinal}`;
         const runId = `run:bounded-sql-history:${ordinal}`;
@@ -4134,6 +4144,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
               completedAt: nowIso,
               checkpointId: null,
               contextHandoffId: null,
+              ...(runId === rewriteSourceRunId ? { rewrites } : {}),
             })}
           )
         `;
@@ -4616,6 +4627,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           ordinalsFrom(915, 75),
         );
         assert.strictEqual(decodeThreadHistoryCursor(page.nextCursor!).p, 914);
+        assert.deepEqual(
+          page.runs?.map((run) => run.id),
+          page.items.map((row) => row.item.runId),
+        );
         // A jump to an entry reads the full index and leaves it cached. With work, it looks for
         // inline output only in its page's runs, not in a run after its cursor.
         const scannedRuns: Array<string> = [];
@@ -4687,6 +4702,22 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           "DELETE FROM orchestration_v2_projection_turn_items WHERE ordinal BETWEEN 2 AND 400",
         );
         assert.isAtMost(fullSteps, rowReadSteps() * 1.1);
+
+        const runRead = rowReads.find(
+          ([query]) =>
+            query.includes("SELECT payload_json FROM orchestration_v2_projection_runs") &&
+            query.includes("AND run_id IN"),
+        );
+        assert.isDefined(runRead);
+        const [runQuery, runParams] = runRead;
+        const runPlan = copy
+          .prepare(`EXPLAIN QUERY PLAN ${runQuery}`)
+          .all(...(runParams as ReadonlyArray<NodeSqlite.SQLInputValue>));
+        assert.isTrue(
+          runPlan.some(({ detail }) =>
+            /SEARCH orchestration_v2_projection_runs.*run_id=\?/.test(String(detail)),
+          ),
+        );
       }
       // Rows that a rolled-back run hides below the page still shift every position above them.
       const setOldRunStatus = (status: "rolled_back" | "completed") => sql`
@@ -4757,6 +4788,20 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         projection: initialSnapshot.projection,
         snapshotSequence: initialSnapshot.snapshotSequence,
       });
+      assert.notInclude(
+        initialPage.projection.runs.map((run) => run.id),
+        rewriteSourceRunId,
+      );
+      const initialCursor = initialPage.historyCursor;
+      assert.isNotNull(initialCursor);
+      const coldHistory = yield* historyPage(
+        threadId,
+        initialCursor,
+        "turn-item:bounded-sql-history:450",
+      );
+      const recoveredRun = coldHistory.runs?.find((run) => run.id === rewriteSourceRunId);
+      assert.equal(recoveredRun?.status, "completed");
+      assert.deepEqual(recoveredRun?.rewrites, rewrites);
       const loadedIds = initialPage.projection.visibleTurnItems.map((row) =>
         String(row.sourceItemId),
       );
@@ -6230,6 +6275,24 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         projectionStore.getTimelinePage(forkThreadId, { view: "activity", limit: 1 });
       const forkTotal = (yield* forkPage()).totalItems;
       assert.strictEqual((yield* forkPage()).totalItems, forkTotal);
+      const inheritedHistory = yield* projectionStore.getThreadHistoryPage(
+        forkThreadId,
+        encodeThreadHistoryCursor({
+          snapshotSequence: 0,
+          sourceThreadId: forkThreadId,
+          sourceItemId: "absent",
+          position: forkTotal,
+        }),
+      );
+      assert.isTrue(
+        inheritedHistory.items.some(
+          (row) =>
+            row.visibility === "inherited" &&
+            row.sourceThreadId === threadId &&
+            row.item.runId === runId,
+        ),
+      );
+      assert.deepEqual(inheritedHistory.runs, []);
       yield* projectionStore.apply({
         id: EventId.make("event:paged-scrollback:late-item"),
         type: "turn-item.updated",

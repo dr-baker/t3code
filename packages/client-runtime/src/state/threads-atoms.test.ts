@@ -1,8 +1,13 @@
 import {
   EnvironmentId,
   EventId,
+  MessageId,
+  RunId,
+  ThreadId,
   ORCHESTRATION_V2_WS_METHODS,
   TurnItemId,
+  type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2Run,
   type OrchestrationV2ThreadHistoryPage,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadDetailSnapshot,
@@ -36,6 +41,7 @@ import { createEnvironmentThreadDetailAtoms } from "./threadDetail.ts";
 import { v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
 import { createEnvironmentThreadStateAtoms, type EnvironmentThreadState } from "./threads.ts";
+import { placeRewriteControls } from "./threadRelationships.ts";
 import * as ThreadSnapshotLoader from "./threadSnapshotHttp.ts";
 
 const TARGET = new PrimaryConnectionTarget({
@@ -325,72 +331,207 @@ describe("createEnvironmentThreadStateAtoms", () => {
     }),
   );
 
-  it.effect("opens from the bounded socket snapshot without HTTP and merges older history", () =>
+  it.effect("cold-opens from a bounded socket snapshot and restores older rewrite choices", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness({ socketSnapshot: false });
       const unmount = h.registry.mount(h.stateAtom);
       const subscription = yield* Queue.take(h.subscriptions);
       expect(subscription.afterSequence).toBeUndefined();
 
+      const candidate = {
+        threadId: ThreadId.make("older-rewrite-child"),
+        runId: RunId.make("older-rewrite-child-run"),
+        modelSelection: THREAD.thread.modelSelection,
+      };
+      const rewrites = { candidates: [candidate], selectedThreadId: candidate.threadId };
+      const original = {
+        id: RunId.make("older-rewrite-source-run"),
+        threadId: THREAD_ID,
+        ordinal: 2,
+        providerInstanceId: THREAD.thread.providerInstanceId,
+        modelSelection: THREAD.thread.modelSelection,
+        providerThreadId: null,
+        userMessageId: MessageId.make("older-prompt"),
+        rootNodeId: null,
+        activeAttemptId: null,
+        status: "completed",
+        requestedAt: THREAD.thread.createdAt,
+        startedAt: THREAD.thread.createdAt,
+        completedAt: THREAD.thread.createdAt,
+        checkpointId: null,
+        contextHandoffId: null,
+        rewrites,
+      } satisfies OrchestrationV2Run;
+      const recent: OrchestrationV2Run = {
+        ...original,
+        id: RunId.make("recent-run"),
+        ordinal: 4,
+        userMessageId: MessageId.make("recent-prompt"),
+        rewrites: undefined,
+      };
       yield* Queue.offer(subscription.events, {
         kind: "snapshot",
         snapshotSequence: 12,
-        projection: THREAD,
+        projection: { ...THREAD, runs: [recent] },
         historyCursor: "socket-older-1",
         hasMoreHistory: true,
         latestLocalTurnOrdinal: 4,
       });
       yield* Queue.offer(subscription.events, { kind: "synchronized" });
-      yield* observeState(
+      const cold = yield* observeState(
         h.registry,
         h.stateAtom,
         (state) => state.status === "live" && state.history.historyCursor === "socket-older-1",
       );
+      expect(Option.getOrThrow(cold.data).runs.map((run) => run.id)).toEqual([recent.id]);
 
       const loading = yield* h.loadEarlier().pipe(Effect.forkScoped);
       const request = yield* Queue.take(h.olderLoads);
       expect(request.cursor).toBe("socket-older-1");
-      const olderItem = {
-        id: TurnItemId.make("socket-fallback-older-item"),
-        type: "command_execution" as const,
+
+      const prompt = {
+        id: TurnItemId.make("older-original-prompt"),
+        type: "user_message" as const,
         threadId: THREAD_ID,
-        runId: null,
+        runId: original.id,
         nodeId: null,
         providerThreadId: null,
         providerTurnId: null,
         nativeItemRef: null,
         parentItemId: null,
-        ordinal: 1,
+        ordinal: 2,
         status: "completed" as const,
-        title: "Earlier command",
-        input: "pwd",
-        output: "/workspace",
-        exitCode: 0,
+        title: null,
+        createdBy: "user" as const,
+        creationSource: "web" as const,
+        inputIntent: "turn_start" as const,
+        messageId: original.userMessageId,
+        text: "Original request",
+        attachments: [],
         startedAt: THREAD.thread.createdAt,
         completedAt: THREAD.thread.createdAt,
         updatedAt: THREAD.thread.createdAt,
       };
-      yield* Deferred.succeed(request.response, {
+      const answer = {
+        ...prompt,
+        id: TurnItemId.make("older-original-answer"),
+        type: "assistant_message" as const,
+        ordinal: 3,
+        messageId: MessageId.make("older-original-reply"),
+        text: "Original answer",
+        streaming: false,
+      };
+      const selectedPage = {
+        snapshotSequence: 13,
+        items: [prompt, answer].map((item, position): OrchestrationV2ProjectedTurnItem => ({
+          position,
+          visibility: "local",
+          sourceThreadId: THREAD_ID,
+          sourceItemId: item.id,
+          item,
+        })),
+        runs: [original],
+        nextCursor: "socket-older-2",
+        hasMoreHistory: true,
+      };
+      yield* Deferred.succeed(request.response, selectedPage);
+      expect(yield* Fiber.join(loading)).toEqual({ _tag: "loaded" });
+
+      type RenderedRow = {
+        readonly id: string;
+        readonly runId: RunId | null;
+        readonly answer: boolean;
+        readonly group?: OrchestrationV2Run["rewrites"];
+        readonly selectedThreadId?: ThreadId | null;
+      };
+      const renderTimeline = (projection: OrchestrationV2ThreadProjection) =>
+        placeRewriteControls<RenderedRow>({
+          rows: projection.visibleTurnItems.map(({ item }) => ({
+            id: item.id,
+            runId: item.runId,
+            answer: item.type === "assistant_message",
+          })),
+          runs: projection.runs,
+          availableCandidates: new Set([candidate.threadId]),
+          describe: (row) => row,
+          makeControl: (_, runId, group, selected) => ({
+            id: `rewrite:${runId}`,
+            runId,
+            answer: false,
+            group,
+            selectedThreadId: selected?.threadId ?? null,
+          }),
+        });
+
+      const controlId = `rewrite:${original.id}`;
+      const paged = Option.getOrThrow(h.registry.get(h.stateAtom).data);
+      const selectedTimeline = renderTimeline(paged);
+      expect(selectedTimeline.map((row) => row.id)).toEqual([prompt.id, controlId]);
+      expect(selectedTimeline.at(-1)).toMatchObject({
+        group: rewrites,
+        selectedThreadId: candidate.threadId,
+      });
+      expect(paged.runs.map((run) => run.id)).toEqual([original.id, recent.id]);
+
+      const loadingStale = yield* h.loadEarlier().pipe(Effect.forkScoped);
+      const stale = yield* Queue.take(h.olderLoads);
+      expect(stale.cursor).toBe("socket-older-2");
+      yield* Queue.offer(subscription.events, {
+        kind: "event",
+        sequence: 14,
+        event: {
+          id: EventId.make("restore-older-rewrite"),
+          type: "run.updated",
+          threadId: THREAD_ID,
+          runId: original.id,
+          occurredAt: prompt.updatedAt,
+          payload: { ...original, rewrites: { ...rewrites, selectedThreadId: null } },
+          rewritesOnly: true,
+        },
+      });
+      yield* observeState(
+        h.registry,
+        h.stateAtom,
+        (state) =>
+          Option.getOrNull(state.data)?.runs.find((run) => run.id === original.id)?.rewrites
+            ?.selectedThreadId === null,
+      );
+
+      const notice = {
+        ...prompt,
+        id: TurnItemId.make("earlier-notice"),
+        type: "system_notice" as const,
+        ordinal: 1,
+        message: "Earlier activity",
+      };
+      yield* Deferred.succeed(stale.response, {
+        ...selectedPage,
         snapshotSequence: 12,
+        runs: [{ ...original, status: "waiting", completedAt: null }],
         items: [
           {
             position: 0,
             visibility: "local",
             sourceThreadId: THREAD_ID,
-            sourceItemId: olderItem.id,
-            item: olderItem,
+            sourceItemId: notice.id,
+            item: notice,
           },
+          ...selectedPage.items.map((row) => ({ ...row, position: row.position + 1 })),
         ],
         nextCursor: null,
         hasMoreHistory: false,
       });
-      expect(yield* Fiber.join(loading)).toEqual({ _tag: "loaded" });
-
-      const state = h.registry.get(h.stateAtom);
-      expect(Option.getOrThrow(state.data).visibleTurnItems.map((row) => row.sourceItemId)).toEqual(
-        [olderItem.id],
-      );
-      expect(state.history).toMatchObject({
+      expect(yield* Fiber.join(loadingStale)).toEqual({ _tag: "loaded" });
+      const restored = h.registry.get(h.stateAtom);
+      const projection = Option.getOrThrow(restored.data);
+      const timeline = renderTimeline(projection);
+      expect(timeline.map((row) => row.id)).toEqual([notice.id, prompt.id, answer.id, controlId]);
+      expect(timeline.at(-1)).toMatchObject({
+        group: { candidates: [candidate], selectedThreadId: null },
+        selectedThreadId: null,
+      });
+      expect(projection.runs.find((run) => run.id === original.id)?.status).toBe("completed");
+      expect(restored.history).toMatchObject({
         historyCursor: null,
         hasMoreHistory: false,
         loading: false,

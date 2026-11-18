@@ -1,6 +1,7 @@
 import type {
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2Subagent,
+  OrchestrationV2Run,
   OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import { isOrchestrationV2TurnItemVisible } from "@t3tools/shared/orchestrationV2Timeline";
@@ -83,11 +84,36 @@ function interleavePage(
   return merged;
 }
 
+function mergeHistoryRuns(
+  projection: OrchestrationV2ThreadProjection,
+  rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+  pageRuns: ReadonlyArray<OrchestrationV2Run> | undefined,
+) {
+  if (!pageRuns?.length) return projection.runs;
+  const localRunIds = new Set(
+    rows
+      .filter((row) => row.visibility === "local" && row.sourceThreadId === projection.thread.id)
+      .map((row) => row.item.runId),
+  );
+  const existing = new Set(projection.runs.map((run) => run.id));
+  const older = pageRuns.filter(
+    (run) =>
+      run.threadId === projection.thread.id && localRunIds.has(run.id) && !existing.has(run.id),
+  );
+  return older.length
+    ? [...older, ...projection.runs].sort((left, right) => left.ordinal - right.ordinal)
+    : projection.runs;
+}
+
 export function mergeOlderHistoryIntoProjection(
   projection: OrchestrationV2ThreadProjection,
   olderItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
-  work?: { readonly anchorId: string; readonly nextCursor: string | null },
+  options?: {
+    readonly work?: { readonly anchorId: string; readonly nextCursor: string | null } | undefined;
+    readonly runs?: ReadonlyArray<OrchestrationV2Run> | undefined;
+  },
 ): OrchestrationV2ThreadProjection {
+  const { work } = options ?? {};
   if (olderItems.length === 0 && work === undefined) {
     return projection;
   }
@@ -185,13 +211,16 @@ export function mergeOlderHistoryIntoProjection(
   } else {
     visible = interleavePage(projection.visibleTurnItems, page, pageKeys);
   }
+  const runs = mergeHistoryRuns(projection, page, options?.runs);
   if (
+    runs === projection.runs &&
     visible.length === projection.visibleTurnItems.length &&
     visible.every((row, index) => row === projection.visibleTurnItems[index])
   )
     return projection;
   return {
     ...projection,
+    runs,
     turnItems: [...turnItemById.values()],
     visibleTurnItems: renumberVisible(visible),
   };

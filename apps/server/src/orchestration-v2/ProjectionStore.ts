@@ -7999,9 +7999,30 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND subagent_id IN (SELECT value FROM json_each(${encodeIdList(subagentIds)}))
             ORDER BY COALESCE(started_at, ''), subagent_id ASC
           `.pipe(Effect.flatMap(decodeRows(decodeSubagentPayload, threadId)));
+            const runIds = [
+              ...new Set(
+                rows.flatMap((row) =>
+                  row.visibility === "local" &&
+                  row.sourceThreadId === threadId &&
+                  row.item.runId !== null
+                    ? [row.item.runId]
+                    : [],
+                ),
+              ),
+            ];
+            const runs =
+              runIds.length === 0
+                ? []
+                : yield* sql<PayloadRow>`
+                  SELECT payload_json FROM orchestration_v2_projection_runs
+                  WHERE ${threadColumn(runIds)} = ${threadId}
+                    AND run_id IN (SELECT value FROM json_each(${encodeIdList(runIds)}))
+                  ORDER BY ordinal ASC
+                `.pipe(Effect.flatMap(decodeRows(decodeRunPayload, threadId)));
             return {
               snapshotSequence,
               items: rows,
+              runs,
               nextCursor: bounded.hasMoreHistory ? bounded.nextCursor : page.nextCursor,
               hasMoreHistory: bounded.hasMoreHistory || page.hasMoreHistory,
               ...(subagents.length === 0 ? {} : { subagents }),

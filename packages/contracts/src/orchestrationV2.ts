@@ -4440,6 +4440,7 @@ export const OrchestrationV2ThreadHistoryPage = withRecordIdTable(
         item: ForwardCompatibleUnion(OrchestrationV2TurnItem.members, "type"),
       })),
     ),
+    runs: Schema.optionalKey(Schema.Array(OrchestrationV2Run)),
     nextCursor: Schema.NullOr(TrimmedNonEmptyString),
     hasMoreHistory: Schema.Boolean,
     /** Records of the page's subagent items, which a bounded snapshot can omit. */
