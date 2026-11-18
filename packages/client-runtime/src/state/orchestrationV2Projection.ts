@@ -354,7 +354,12 @@ export function applyOrchestrationV2ProjectionEvent(
           ? { ...event.payload, output: known.output }
           : event.payload;
       const run = known?.rewrites ? { ...runWithOutput, rewrites: known.rewrites } : runWithOutput;
-      const next = { ...base, runs: upsertEntity(base.runs, run) };
+      const next = {
+        ...base,
+        runs: known
+          ? upsertEntity(base.runs, run)
+          : [...base.runs, run].sort((left, right) => left.ordinal - right.ordinal),
+      };
       const visible = { ...next, visibleTurnItems: activeVisibleTurnItems(next) };
       const wasQueued = known?.status === "queued";
       return wasQueued && event.payload.status !== "queued"
