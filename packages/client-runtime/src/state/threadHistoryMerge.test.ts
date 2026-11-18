@@ -80,7 +80,8 @@ describe("threadHistoryMerge", () => {
       ),
     };
     const loadedWork = mergeOlderHistoryIntoProjection(deferred, [row(1), row(2), row(3)], {
-      work: { anchorId: anchorItem.id, nextCursor: null },
+      anchorId: anchorItem.id,
+      nextCursor: null,
     });
     expect(loadedWork.visibleTurnItems.map((entry) => entry.sourceItemId)).toEqual([
       "item-1",

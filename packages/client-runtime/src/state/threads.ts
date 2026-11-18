@@ -854,13 +854,14 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                     ...latest,
                     data: Option.some(
                       mergeOlderSubagentsIntoProjection(
-                        mergeOlderHistoryIntoProjection(latest.data.value, page.items, {
-                          runs: page.runs,
-                          work:
-                            workAnchorId === undefined
-                              ? undefined
-                              : { anchorId: workAnchorId, nextCursor: page.nextCursor },
-                        }),
+                        mergeOlderHistoryIntoProjection(
+                          latest.data.value,
+                          page.items,
+                          workAnchorId === undefined
+                            ? undefined
+                            : { anchorId: workAnchorId, nextCursor: page.nextCursor },
+                          page.runs,
+                        ),
                         page.subagents,
                       ),
                     ),

@@ -108,12 +108,9 @@ function mergeHistoryRuns(
 export function mergeOlderHistoryIntoProjection(
   projection: OrchestrationV2ThreadProjection,
   olderItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
-  options?: {
-    readonly work?: { readonly anchorId: string; readonly nextCursor: string | null } | undefined;
-    readonly runs?: ReadonlyArray<OrchestrationV2Run> | undefined;
-  },
+  work?: { readonly anchorId: string; readonly nextCursor: string | null },
+  pageRuns?: ReadonlyArray<OrchestrationV2Run>,
 ): OrchestrationV2ThreadProjection {
-  const { work } = options ?? {};
   if (olderItems.length === 0 && work === undefined) {
     return projection;
   }
@@ -211,7 +208,7 @@ export function mergeOlderHistoryIntoProjection(
   } else {
     visible = interleavePage(projection.visibleTurnItems, page, pageKeys);
   }
-  const runs = mergeHistoryRuns(projection, page, options?.runs);
+  const runs = mergeHistoryRuns(projection, page, pageRuns);
   if (
     runs === projection.runs &&
     visible.length === projection.visibleTurnItems.length &&
