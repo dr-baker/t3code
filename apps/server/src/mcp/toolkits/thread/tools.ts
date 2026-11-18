@@ -77,6 +77,26 @@ const commandTool = {
     SecureRandom.SecureRandom,
   ],
 };
+const ThreadWatchTool = Tool.make("t3_thread_watch", {
+  ...commandTool,
+  success: Schema.Struct({
+    sequence: NonNegativeInt,
+    watching: Schema.Boolean,
+    next: Schema.optional(Schema.String),
+  }),
+  description:
+    "Watch another thread in this environment without polling. Omit threadId for this thread. T3 wakes this thread on completion, failure, stop, questions or approvals. Default until=turn watches current or next work and ends when it finishes; until=settled watches later turns too. watching=false stops the watch and cancels undelivered wakes. Watches survive restarts and appear in the sidebar. After registering, end your turn; do not schedule or poll. Use delegate_task completion wakes for owned tasks instead.",
+  parameters: Schema.Struct({
+    environmentId: OrchestratorMcpEnvironmentTarget,
+    threadId: Schema.optional(ThreadId),
+    targetThreadId: ThreadId,
+    watching: Schema.optional(Schema.Boolean),
+    until: Schema.optional(Schema.Literals(["turn", "settled"])),
+  }),
+})
+  .annotate(Tool.Title, "Watch a thread")
+  .annotate(Tool.Destructive, true);
+
 const queueEntry = Schema.Struct({
   queuedRunId: RunId,
   text: Schema.String,
@@ -262,6 +282,7 @@ export const ThreadToolkit = Toolkit.make(
   ThreadConfigureTool,
   ThreadTransferTool,
   ThreadOrganizeTool,
+  ThreadWatchTool,
   PendingRequestTool,
   QueueTool,
   SubmitOutputTool,

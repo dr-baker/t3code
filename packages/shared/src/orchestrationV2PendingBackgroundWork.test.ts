@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ProviderInstanceId, ProviderThreadId } from "@t3tools/contracts";
+import { CommandId, ThreadId, ProviderInstanceId, ProviderThreadId } from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
@@ -18,6 +18,39 @@ describe("backgroundWorkHoldsCompletion", () => {
 });
 
 describe("derivePendingBackgroundWork", () => {
+  it.each([
+    ["turn", false, false, true],
+    ["settled", true, false, true],
+    ["settled", false, false, false],
+    ["settled", true, true, false],
+  ] as const)(
+    "thread watch until %s, pending %s, ended %s holds: %s",
+    (until, workPending, ended, holds) => {
+      const tasks = derivePendingBackgroundWork({
+        latestRun: null,
+        providerThreads: [],
+        turnItems: [],
+        threadWatches: [
+          {
+            id: CommandId.make("watch"),
+            threadId: ThreadId.make("target"),
+            title: "Build",
+            until,
+            workPending,
+            ended,
+          },
+        ],
+      });
+      expect(tasks.length).toBe(ended ? 0 : 1);
+      expect(backgroundWorkHoldsCompletion(tasks)).toBe(holds);
+      expect(
+        monitorHoldsWakeCompletion({
+          latestRunBackgroundWake: true,
+          pendingBackgroundTasks: tasks,
+        }),
+      ).toBe(false);
+    },
+  );
   it("takes each subagent item's instance from its joined owner", () => {
     const owner = ProviderInstanceId.make("claude-owner");
     const tasks = derivePendingBackgroundWork({

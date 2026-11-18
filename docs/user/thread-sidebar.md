@@ -152,7 +152,7 @@ open.
 
 Threads that are working or waiting on work they will resume from move into a collapsed
 **Working** section below the active list.
-That includes subagents, watched pull requests with checks still running, Claude monitors,
+That includes subagents, watched threads, watched pull requests with checks still running, Claude monitors,
 and background commands or other monitors the agent says it is waiting on. A dev server or other process an agent leaves running does not keep a thread
 there. A thread returns to the top of the active list when it finishes, fails, or needs an approval or
 answer. The Working section lists the thread you last sent work to first. Pinned threads stay in
@@ -381,6 +381,12 @@ unarchiving the thread brings them back.
 
 On mobile, a thread lists its side chats above the composer. Tap one to open it and
 answer its questions.
+
+## Watch another thread
+
+In a thread's details, add a **Thread watch** to be notified when another thread on the same server finishes, fails, stops, or needs input. The watch can end when its current work finishes or stay active until the watched thread is settled. It survives closing the client and restarting the server.
+
+Active watches appear in the sidebar. Stop an individual watch in thread details, or stop the watching thread's background work to clear its watches. On mobile, use **Thread watches** in the thread menu. Agents can register the same watch with `t3_thread_watch`; owned delegated tasks already provide completion notifications.
 
 ## Snooze until later
 

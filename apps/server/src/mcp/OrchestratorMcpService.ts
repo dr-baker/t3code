@@ -918,10 +918,19 @@ function threadSnooze(
 
 // Provider-internal links (parentTaskId, providerInstanceId) stay out of agent results.
 function threadBackgroundWork(
-  thread: Pick<OrchestrationV2ThreadShell, "blockedOnThreadWait" | "pendingBackgroundTasks">,
-): Required<Pick<OrchestratorMcpThreadListItem, "blockedOnThreadWait" | "pendingBackgroundTasks">> {
+  thread: Pick<
+    OrchestrationV2ThreadShell,
+    "blockedOnThreadWait" | "pendingBackgroundTasks" | "threadWatches"
+  >,
+): Required<
+  Pick<
+    OrchestratorMcpThreadListItem,
+    "blockedOnThreadWait" | "pendingBackgroundTasks" | "threadWatches"
+  >
+> {
   return {
     blockedOnThreadWait: thread.blockedOnThreadWait === true,
+    threadWatches: thread.threadWatches ?? [],
     pendingBackgroundTasks: (thread.pendingBackgroundTasks ?? []).map((task) => ({
       taskId: task.taskId,
       kind: task.kind,

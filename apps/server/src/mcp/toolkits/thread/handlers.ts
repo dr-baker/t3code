@@ -400,6 +400,27 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       }),
     ),
   ),
+  t3_thread_watch: writesThread((input) =>
+    Effect.gen(function* () {
+      if (input.watching !== false) yield* readThread(input.targetThreadId, []);
+      const result = yield* dispatch(input.threadId, (common) => ({
+        ...common,
+        type: "thread.watch",
+        targetThreadId: input.targetThreadId,
+        watching: input.watching ?? true,
+        ...(input.until === undefined ? {} : { until: input.until }),
+      }));
+      return {
+        ...result,
+        watching: input.watching ?? true,
+        ...(input.watching === false
+          ? {}
+          : {
+              next: "T3 checks the current state and watches future events. Updates wake this thread automatically. End your turn when no independent work remains; do not poll or schedule checks.",
+            }),
+      };
+    }),
+  ),
   t3_thread_organize: writesThread((input) =>
     Effect.gen(function* () {
       const { threads, projection, caller } = yield* readThread(input.threadId);

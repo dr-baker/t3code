@@ -1283,6 +1283,17 @@ export const unlinkThreadIssue = Effect.fn("EnvironmentCommands.unlinkThreadIssu
     commandId: yield* allocateCommandId(input),
   });
 });
+
+export const watchThread = Effect.fn("EnvironmentCommands.watchThread")(function* (
+  input: Omit<Extract<OrchestrationV2Command, { type: "thread.watch" }>, "type" | "commandId"> &
+    CommandMetadata,
+) {
+  return yield* dispatch({
+    ...input,
+    type: "thread.watch",
+    commandId: yield* allocateCommandId(input),
+  });
+});
 export type WatchThreadPullRequestInput = Omit<
   Extract<OrchestrationV2Command, { type: "thread.pull-request.watch" }>,
   "type" | "commandId"
