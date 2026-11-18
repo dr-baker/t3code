@@ -10,7 +10,6 @@ import { ListSection } from "../../components/ui/ListSection";
 import { collectMobileAssistantTextSelectors } from "../../lib/assistantCitationSelection";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
-import { placeRewriteControls } from "@t3tools/client-runtime/state/thread-relationships";
 import { MobileRewrites } from "./MobileRewrites";
 import { TurnCostButton } from "./TurnCostButton";
 import { Button } from "../../components/ui/Button";
@@ -243,6 +242,7 @@ import {
 } from "../../lib/markdownLinks";
 import {
   createThreadFeedCache,
+  placeThreadFeedRewriteControls,
   threadFeedCompactionLabels,
   failedFeedRunIds,
   deriveThreadFeedPresentation,
@@ -3989,32 +3989,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       rewriteParent.thread.delegatedFrom
     )
       return feed;
-    return placeRewriteControls<ThreadFeedEntry>({
-      rows: feed,
-      runs: rewriteParent.runs,
-      availableCandidates: availableRewriteCandidates,
-      describe: (row) => {
-        if (row.type === "message") {
-          return { runId: row.message.runId, answer: row.message.role === "assistant" };
-        }
-        if (row.type === "pending-fold") {
-          return { runId: null, answer: false };
-        }
-        return {
-          runId: row.runId,
-          answer:
-            row.type === "html-render" || row.type === "sent-message" || row.type === "mcp-app",
-        };
-      },
-      makeControl: (row, runId, group, selected) => ({
-        type: "rewrite",
-        id: `rewrite:${runId}`,
-        createdAt: row.createdAt,
-        runId,
-        group,
-        selected,
-      }),
-    });
+    return placeThreadFeedRewriteControls(feed, rewriteParent.runs, availableRewriteCandidates);
   }, [availableRewriteCandidates, feed, rewriteParent]);
   const presentedFeed = appendGuestPendingMessages(rewriteFeed, guestShare, m);
   const pendingFoldMessageId =
