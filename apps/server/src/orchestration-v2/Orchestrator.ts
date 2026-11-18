@@ -1444,6 +1444,22 @@ function pendingMergeBackTransfersForThread(
   );
 }
 
+function rewriteSourceRun(thread: OrchestrationV2AppThread) {
+  return thread.lineage.rewrite && thread.forkedFrom?.type === "run" ? thread.forkedFrom : null;
+}
+
+function pendingRewriteTransfer(
+  projection: Pick<OrchestrationV2ThreadProjection, "contextTransfers" | "thread">,
+  candidate: NonNullable<OrchestrationV2Run["rewrites"]>["candidates"][number] | undefined,
+) {
+  if (!candidate) return undefined;
+  return pendingMergeBackTransfersForThread(projection).find(
+    (transfer) =>
+      transfer.sourceThreadId === candidate.threadId &&
+      transfer.sourcePoint.runId === candidate.runId,
+  );
+}
+
 function latestContextTransfer(
   transfers: ReadonlyArray<OrchestrationV2ContextTransfer>,
 ): OrchestrationV2ContextTransfer | undefined {
@@ -6488,6 +6504,50 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
+  const reconcileDeletedRewrite = Effect.fn("Orchestrator.reconcileDeletedRewrite")(function* (
+    command: Extract<OrchestrationV2Command, { type: "thread.delete" }>,
+    child: OrchestrationV2AppThread,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    now: DateTime.Utc,
+  ) {
+    const source = rewriteSourceRun(child);
+    if (!source) return;
+    const parent = yield* projectionStore
+      .getThreadRecords(source.threadId, ["runs", "contextTransfers"], {
+        runIds: [source.runId],
+        contextTransferStatuses: ["pending"],
+      })
+      .pipe(
+        Effect.catchTags({
+          ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+        }),
+        mapDispatchError(command),
+      );
+    if (!parent || parent.thread.deletedAt !== null) return;
+    const run = parent.runs.find((run) => run.id === source.runId);
+    if (!run?.rewrites || run.rewrites.selectedThreadId !== child.id) return;
+    const transfer = pendingRewriteTransfer(
+      parent,
+      run.rewrites.candidates.find((candidate) => candidate.threadId === child.id),
+    );
+    const emitEvent = emit(events, command);
+    if (transfer) {
+      yield* emitEvent({
+        type: "context-transfer.updated",
+        threadId: source.threadId,
+        occurredAt: now,
+        payload: { ...transfer, status: "superseded", updatedAt: now },
+      });
+    }
+    yield* emitEvent({
+      type: "run.rewrites-updated",
+      threadId: source.threadId,
+      runId: run.id,
+      occurredAt: now,
+      payload: { ...run, rewrites: { ...run.rewrites, selectedThreadId: null } },
+    });
+  });
+
   const dispatchRewrites = Effect.fn("Orchestrator.dispatchRewrites")(function* (
     command: Extract<
       OrchestrationV2Command,
@@ -6583,16 +6643,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return yield* reject("This rewrite belongs to another turn.");
       const { selectedThreadId } = rewrites;
       const selected = rewrites.candidates.find((entry) => entry.threadId === selectedThreadId);
-      const previous =
-        selected &&
-        projection.contextTransfers.find(
-          (transfer) =>
-            transfer.type === "merge_back" &&
-            transfer.status === "pending" &&
-            transfer.targetThreadId === thread.id &&
-            transfer.sourceThreadId === selected.threadId &&
-            transfer.sourcePoint.runId === selected.runId,
-        );
+      const previous = pendingRewriteTransfer(projection, selected);
       if (candidate) {
         if (
           projection.contextTransfers.some(
@@ -16161,6 +16212,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 (cause) => new OrchestratorProjectionError({ threadId: deletion.threadId, cause }),
               ),
             );
+          if (deletion.threadId === command.threadId) {
+            yield* reconcileDeletedRewrite(command, projection.thread, events, now);
+          }
           return yield* mapDispatchError(command)(
             planThreadDeletion({
               command: deletion,
@@ -16198,7 +16252,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           )),
         ];
         return {
-          events: plans.flatMap((plan) => plan.events),
+          events: [...plans.flatMap((plan) => plan.events), ...(yield* Ref.get(events))],
           effects: plans.flatMap((plan) => plan.effects),
         };
       }
@@ -16930,12 +16984,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ? dispatch
         : threadDispatch.withLock(command.sourceThreadId, dispatch);
     }
-    if (
-      command.type === "thread.delete" ||
-      command.type === "thread.archive" ||
-      command.type === "thread.unarchive"
-    ) {
-      const cascade = threadDispatch.withLock(
+    if (command.type === "thread.archive" || command.type === "thread.unarchive") {
+      return yield* threadDispatch.withLock(
         command.threadId,
         liveSideChatIds(command.threadId).pipe(
           Effect.flatMap((sideChatIds) =>
@@ -16946,9 +16996,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ),
         ),
       );
-      return yield* command.type === "thread.delete"
-        ? threadDispatch.withDeletionLock(cascade)
-        : cascade;
+    }
+    if (command.type === "thread.delete") {
+      return yield* threadDispatch.withDeletionLock(
+        Effect.gen(function* () {
+          const thread = yield* projectionStore
+            .getThread(command.threadId)
+            .pipe(
+              Effect.mapError(
+                (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+              ),
+            );
+          const source = rewriteSourceRun(thread);
+          const deletion = threadDispatch.withLock(
+            command.threadId,
+            liveSideChatIds(command.threadId).pipe(
+              Effect.flatMap((sideChatIds) =>
+                sideChatIds.reduce(
+                  (locked, sideChatId) => threadDispatch.withLock(sideChatId, locked),
+                  dispatchWithReceiptEffect(command, sideChatIds),
+                ),
+              ),
+            ),
+          );
+          // Serialize deletion with the parent's rewrite selection and consumption.
+          return yield* source ? threadDispatch.withLock(source.threadId, deletion) : deletion;
+        }),
+      );
     }
     // Taken before the lineage read, so a message whose read yields keeps its
     // place ahead of later messages to the same thread.

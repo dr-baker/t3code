@@ -1077,14 +1077,17 @@ const assistantAnswer = (text: string, id: string) =>
   }) satisfies AnswerOutput;
 
 it.effect("a rewrite council starts atomically and brings only the chosen run back", () => {
-  const followUpStarted = Deferred.makeUnsafe<ProviderAdapter.ProviderAdapterV2TurnInput>();
+  const starts = new Map<MessageId, ProviderAdapter.ProviderAdapterV2TurnInput>();
   const first = forkCases[0]!;
   const second = forkCases[1]!;
   const layer = ProviderReplayHarness.layerWithRegistry(
     { name: "rewrite-selection" },
     ProviderAdapterRegistry.layerFromAdapters([
       recordingForkAdapter(first.adapter, {
-        onStart: (turn) => Deferred.succeed(followUpStarted, turn).pipe(Effect.asVoid),
+        onStart: (turn) =>
+          Effect.sync(() => {
+            starts.set(turn.message.messageId, turn);
+          }),
       }),
       second.adapter,
     ]),
@@ -1267,8 +1270,9 @@ it.effect("a rewrite council starts atomically and brings only the chosen run ba
     yield* select("choose-again", artifactSeat.threadId);
     yield* askSideChat(threadId, "continue-after-rewrite", firstModel);
     yield* worker.drain();
-    assert.isTrue(yield* Deferred.isDone(followUpStarted));
-    const delivered = JSON.stringify(yield* Deferred.await(followUpStarted));
+    const followUpInput = starts.get(MessageId.make("continue-after-rewrite"));
+    assert.isDefined(followUpInput);
+    const delivered = JSON.stringify(followUpInput);
     assert.include(delivered, "SENT_ANSWER_TEXT");
     assert.include(delivered, "selected-chart-attachment");
     assert.notInclude(delivered, "TEXT_SEAT_ANSWER");
@@ -1285,18 +1289,54 @@ it.effect("a rewrite council starts atomically and brings only the chosen run ba
     );
     assert.deepEqual(followUp.modelSelection, firstModel);
 
-    yield* sink.write({
-      events: [
-        {
-          id: EventId.make("finish-rewrite-follow-up"),
-          type: "run.updated",
-          threadId,
-          runId: followUp.id,
-          occurredAt: now,
-          payload: { ...followUp, status: "completed", completedAt: now },
-        },
-      ],
+    const finishParentRun = (run: typeof followUp) =>
+      sink.write({
+        events: [
+          {
+            id: EventId.make(`finish:${run.id}`),
+            type: "run.updated",
+            threadId,
+            runId: run.id,
+            occurredAt: now,
+            payload: { ...run, status: "completed", completedAt: now },
+          },
+        ],
+      });
+    yield* finishParentRun(followUp);
+
+    yield* select("choose-before-deletion", textSeat.threadId);
+    yield* orchestrator.dispatch({
+      type: "thread.delete",
+      commandId: CommandId.make("delete-only-unused-rewrite"),
+      threadId: textSeat.threadId,
+      onlyIfUnused: true,
     });
+    assert.equal((yield* readRun).rewrites?.selectedThreadId, textSeat.threadId);
+    yield* orchestrator.dispatch({
+      type: "thread.delete",
+      commandId: CommandId.make("delete-chosen-rewrite"),
+      threadId: textSeat.threadId,
+    });
+    yield* askSideChat(threadId, "continue-after-deletion", firstModel);
+    yield* worker.drain();
+    const afterDeletionInput = starts.get(MessageId.make("continue-after-deletion"));
+    assert.isDefined(afterDeletionInput);
+    assert.notInclude(JSON.stringify(afterDeletionInput), "TEXT_SEAT_ANSWER");
+    assert.isNull((yield* readRun).rewrites?.selectedThreadId);
+    assert.isTrue(
+      (yield* readParent()).contextTransfers.some(
+        (t) =>
+          t.type === "merge_back" &&
+          t.sourcePoint.runId === textSeat.runId &&
+          t.status === "superseded",
+      ),
+    );
+    yield* select("choose-deleted-rewrite", textSeat.threadId).pipe(Effect.flip);
+    yield* finishParentRun(
+      (yield* readParent()).runs.find((run) => run.id === afterDeletionInput.runId)!,
+    );
+    yield* select("choose-surviving-rewrite", artifactSeat.threadId);
+
     const laterChildRun = RunId.make("later-child-run");
     yield* writeParentRun({
       threadId: artifactSeat.threadId,
@@ -1315,10 +1355,24 @@ it.effect("a rewrite council starts atomically and brings only the chosen run ba
       createdBy: "user",
       creationSource: "web",
     });
-    yield* select("restore-after-follow-up", null);
+    yield* orchestrator.dispatch({
+      type: "thread.delete",
+      commandId: CommandId.make("delete-rewrite-with-later-bring-back"),
+      threadId: artifactSeat.threadId,
+    });
     assert.isNull((yield* readRun).rewrites?.selectedThreadId);
+    const transfersAfterDeletion = (yield* readParent()).contextTransfers;
     assert.isTrue(
-      (yield* readParent()).contextTransfers.some(
+      transfersAfterDeletion.some(
+        (t) =>
+          t.type === "merge_back" &&
+          t.sourcePoint.runId === artifactSeat.runId &&
+          t.targetRunId === followUp.id &&
+          t.status === "consumed",
+      ),
+    );
+    assert.isTrue(
+      transfersAfterDeletion.some(
         (t) =>
           t.type === "merge_back" &&
           t.sourceThreadId === artifactSeat.threadId &&
