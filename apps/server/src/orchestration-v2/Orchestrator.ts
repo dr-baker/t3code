@@ -1,3 +1,4 @@
+import { threadWatchHasPendingWork } from "./threadWatch.ts";
 import { modelCapacityRecoveryDeadline } from "./ModelCapacityRecovery.ts";
 import type {
   OrchestrationV2ThreadLinkMetadata,
@@ -80,6 +81,7 @@ import {
   RuntimeMode,
   ThreadLinkedPullRequest,
   ThreadId,
+  THREAD_WATCH_LIMITS,
   TurnItemId,
   TrimmedNonEmptyString,
   managedRuntimeModeCeilingMessage,
@@ -665,6 +667,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.issue.link":
     case "thread.issue.unlink":
     case "thread.pull-request.watch":
+    case "thread.watch":
+    case "thread.watch.sync":
     case "thread.pull-request-watch.sync":
     case "thread.pull-request-watch.checks-reopen":
     case "thread.pull-request.sync":
@@ -1167,6 +1171,19 @@ function isStalePullRequestWatchStamp(
     link.watch.startedAt !== stamp.watchStartedAt ||
     (stamp.headSha !== null && link.watch.headSha !== stamp.headSha) ||
     pullRequestSnapshotEndsWatch(link.snapshot, link.watch.startedAt)
+  );
+}
+
+function isStaleThreadWatchWake(
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "messages">,
+  run: OrchestrationV2Run,
+): boolean {
+  const source = projection.messages.find((message) => message.id === run.userMessageId)
+    ?.notification?.source;
+  if (source?.kind !== "monitor" || source.threadWatch === undefined) return false;
+  const stamp = source.threadWatch;
+  return !projection.thread.threadWatches?.some(
+    (watch) => watch.id === stamp.id && watch.threadId === stamp.threadId,
   );
 }
 
@@ -2495,7 +2512,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             );
       while (
         storedQueuedRun !== undefined &&
-        isStalePullRequestWatchWake(projection, storedQueuedRun)
+        (isStalePullRequestWatchWake(projection, storedQueuedRun) ||
+          isStaleThreadWatchWake(projection, storedQueuedRun))
       ) {
         yield* writeSystemEvents(
           queuedRunCancellationEvents(projection, storedQueuedRun, yield* DateTime.now),
@@ -4139,6 +4157,152 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
+  const dispatchThreadWatch = Effect.fn("orchestrationV2.dispatch.threadWatch")(function* (
+    command: Extract<
+      OrchestrationV2ServerCommand,
+      { readonly type: "thread.watch" | "thread.watch.sync" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    const thread = yield* projectionStore
+      .getThread(command.threadId)
+      .pipe(mapDispatchError(command));
+    const watches = thread.threadWatches ?? [];
+    let next: NonNullable<OrchestrationV2AppThread["threadWatches"]>;
+    if (command.type === "thread.watch") {
+      if (!command.watching) {
+        next = watches.filter((watch) => watch.threadId !== command.targetThreadId);
+      } else {
+        if (
+          command.targetThreadId === thread.id ||
+          thread.archivedAt !== null ||
+          thread.settledAt !== null ||
+          thread.settledOverride === "settled" ||
+          isProviderNativeSubagentThread(thread)
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Only an active independently controlled thread can watch another thread.",
+          });
+        }
+        if (watches.some((watch) => watch.threadId === command.targetThreadId && !watch.ended))
+          return;
+        const cursor = yield* eventSink.latestSequence().pipe(mapDispatchError(command));
+        const target = yield* projectionStore
+          .getThreadShell(command.targetThreadId)
+          .pipe(mapDispatchError(command));
+        if (target === null || target.deletedAt !== null || target.archivedAt !== null) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "The watched thread is no longer available.",
+          });
+        }
+        const retained = watches.filter((watch) => watch.threadId !== target.id);
+        if (retained.length >= THREAD_WATCH_LIMITS.registrations) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `A thread can watch at most ${THREAD_WATCH_LIMITS.registrations} threads. Remove an existing watch first.`,
+          });
+        }
+        next = [
+          ...retained,
+          {
+            id: command.commandId,
+            threadId: target.id,
+            title: target.title,
+            workPending: threadWatchHasPendingWork(target),
+            progress: { cursor, reported: [], baselinePending: true },
+            ended: false,
+            until: command.until ?? "turn",
+          },
+        ];
+      }
+    } else {
+      const current = watches.find(
+        (watch) => watch.id === command.watch.id && watch.threadId === command.watch.threadId,
+      );
+      if (
+        current === undefined ||
+        current.ended ||
+        (current.progress?.cursor ?? 0) !== command.expectedCursor ||
+        thread.archivedAt !== null ||
+        thread.settledAt !== null ||
+        thread.settledOverride === "settled"
+      )
+        return;
+      if ((command.watch.progress?.cursor ?? 0) < (current.progress?.cursor ?? 0)) return;
+      next = watches.map((watch) => (watch === current ? command.watch : watch));
+    }
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.watches-updated",
+      threadId: thread.id,
+      providerInstanceId: thread.providerInstanceId,
+      occurredAt: yield* DateTime.now,
+      payload: next,
+    });
+    if (command.type === "thread.watch" && !command.watching) {
+      const queued = yield* projectionStore
+        .getThreadRecords(thread.id, ["runs", "messages"], {
+          messageRoles: ["user"],
+          monitorNotificationsOnly: true,
+        })
+        .pipe(mapDispatchError(command));
+      for (const run of queued.runs) {
+        if (run.status !== "queued") continue;
+        const source = queued.messages.find((message) => message.id === run.userMessageId)
+          ?.notification?.source;
+        if (source?.kind === "monitor" && source.threadWatch?.threadId === command.targetThreadId) {
+          yield* dispatchQueuedRunCancel(
+            {
+              type: "queued-run.cancel",
+              commandId: command.commandId,
+              threadId: thread.id,
+              runId: run.id,
+            },
+            events,
+          );
+        }
+      }
+    }
+    if (command.type === "thread.watch.sync" && command.wake !== undefined) {
+      yield* dispatchMessage(
+        {
+          type: "message.dispatch",
+          commandId: command.commandId,
+          threadId: thread.id,
+          messageId: command.wake.messageId,
+          text: command.wake.text,
+          notification: {
+            ...command.wake.notification,
+            source: {
+              kind: "monitor",
+              threadWatch: {
+                id: command.watch.id,
+                threadId: command.watch.threadId,
+                ...(command.wake.causalThreadIds === undefined
+                  ? {}
+                  : { causalThreadIds: command.wake.causalThreadIds }),
+              },
+            },
+          },
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "agent",
+          creationSource: "server",
+        },
+        events,
+        effects,
+      );
+    }
+  });
+
   // Recheck under the lock after reading the host. Record the watch first so wake events carry it.
   const dispatchPullRequestWatchSync = Effect.fn("orchestrationV2.dispatch.pullRequestWatchSync")(
     function* (
@@ -4907,7 +5071,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       markUnreadVisitedAt = DateTime.subtract(latestRunCompletedAt, { milliseconds: 1 });
     }
-    const updatedThread: OrchestrationV2AppThread = (() => {
+    let updatedThread: OrchestrationV2AppThread = (() => {
       switch (command.type) {
         case "thread.archive":
           return {
@@ -5448,6 +5612,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           };
       }
     })();
+    if (command.type === "thread.archive" || command.type === "thread.settle") {
+      updatedThread = { ...updatedThread, threadWatches: [] };
+    }
     if (command.type === "thread.pull-request-watch.checks-reopen") {
       if (updatedThread === thread) return;
       yield* emit(
@@ -13437,6 +13604,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         payload: {
           ...thread,
           pullRequests: pullRequests.map((link) => withPullRequestWatch(link, undefined)),
+          threadWatches: [],
         },
       });
     }
@@ -14420,6 +14588,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
     if (projection.thread.deletedAt !== null) return undefined;
+    if ((projection.thread.threadWatches?.length ?? 0) > 0) {
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.watches-updated",
+        threadId: command.threadId,
+        providerInstanceId: projection.thread.providerInstanceId,
+        occurredAt: yield* DateTime.now,
+        payload: [],
+      });
+    }
     // Queued after the interrupt, since a thread's effects run in order.
     const stopDelegatedTasks =
       command.stopDelegatedTasks === false ||
@@ -15926,6 +16106,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.pull-request-watch.sync":
         yield* dispatchPullRequestWatchSync(command, events, effects);
         break;
+      case "thread.watch":
+      case "thread.watch.sync":
+        yield* dispatchThreadWatch(command, events, effects);
+        break;
       case "thread.guest-share.open":
       case "thread.guest-share.redeem":
       case "thread.guest-share.close":
@@ -16299,6 +16483,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           planned.events.length > 0 ||
           isUnobservedAcknowledgement(command) ||
           command.type === "thread.background-work.settle" ||
+          command.type === "thread.watch" ||
+          command.type === "thread.watch.sync" ||
           // A stale visit changes no read state.
           command.type === "thread.visit" ||
           // A read can answer a watch again before a push's reopen lands; nothing is left to clear.

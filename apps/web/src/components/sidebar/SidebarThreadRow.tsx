@@ -1,3 +1,4 @@
+import { ThreadWatchesPopover } from "../chat/ThreadWatchesPanel";
 import { useAtomMount } from "@effect/atom-react";
 import { asLaunchingThread } from "@t3tools/client-runtime/state/thread-inbox";
 import { useClientSettings } from "../../hooks/useSettings";
@@ -1322,6 +1323,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       </TooltipPopup>
     </Tooltip>
   ) : null;
+  const activeWatches = thread.threadWatches?.filter((watch) => !watch.ended) ?? [];
+  const watchBadge =
+    activeWatches.length === 0 ? null : (
+      <ThreadWatchesPopover
+        environmentId={threadRef.environmentId}
+        threadId={thread.id}
+        count={activeWatches.length}
+      />
+    );
   const terminalStatusIcon = (
     <ThreadTerminalStatusButton
       threadRef={threadRef}
@@ -1410,6 +1420,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     !showsScratchMachine &&
     prBadge === null &&
     issueBadge === null &&
+    (compactCards || watchBadge === null) &&
     diff === null &&
     runningTerminalIds.length === 0;
   const metaLine = metaLineEmpty ? null : (
@@ -1436,6 +1447,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       {terminalStatusIcon}
       {prBadge}
       {issueBadge}
+      {compactCards ? null : watchBadge}
       {diff ? (
         <span className="shrink-0 font-mono">
           <span className="text-diff-addition-foreground">+{formatDiffCount(diff.insertions)}</span>{" "}
@@ -1741,6 +1753,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   </span>
                   {terminalStatusIcon}
                   {prBadge}
+                  {watchBadge}
                 </>
               ) : null}
               {sortable?.isDragging ? (

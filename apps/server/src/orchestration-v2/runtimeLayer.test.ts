@@ -84,6 +84,7 @@ import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryServic
 import * as EventStore from "./EventStore.ts";
 import * as ProjectionReplay from "./testkit/ProjectionReplay.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ThreadWatchReactor from "./ThreadWatchReactor.ts";
 import * as PullRequestWatchReactor from "./PullRequestWatchReactor.ts";
 import { PULL_REQUEST_WATCH_WAKE_LIMIT } from "./pullRequestWatch.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
@@ -353,6 +354,7 @@ const layerProjectionReplayTest = ProjectionReplay.layer.pipe(
 );
 
 const layerTest = Layer.mergeAll(
+  RuntimeLayer.layerEventInfrastructure,
   RuntimeLayer.layer,
   layerProjectionReplayTest,
   RuntimeLayer.layerEventSink,
@@ -1394,6 +1396,290 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
 );
 
 it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
+  it.effect(
+    "thread watches recover once across restart, cancel queued wakes, and ignore monitor turns",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        yield* seedProject({
+          projectId: ProjectId.make("watch-project"),
+          title: "Watch project",
+          workspaceRoot: "/tmp/thread-watch-project",
+          defaultModelSelection: modelSelection,
+          createdAt: "2026-11-17T00:00:00.000Z",
+        });
+        const ownerId = ThreadId.make("thread-watch-owner");
+        const targetId = ThreadId.make("thread-watch-target");
+        for (const threadId of [ownerId, targetId])
+          yield* engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(`${threadId}:create`),
+            threadId,
+            projectId: ProjectId.make("watch-project"),
+            title: threadId,
+            modelSelection,
+            createdBy: "user",
+            creationSource: "web",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          });
+        yield* engine.dispatch({
+          type: "thread.watch",
+          commandId: CommandId.make("watch-before-run"),
+          threadId: ownerId,
+          targetThreadId: targetId,
+          watching: true,
+        });
+        const idleShell = yield* engine.getThreadShell(ownerId);
+        assert.equal(idleShell?.pendingBackgroundTasks?.[0]?.description, `Watching ${targetId}`);
+        yield* engine.dispatch({
+          type: "thread.stop",
+          commandId: CommandId.make("watch-idle-stop"),
+          threadId: ownerId,
+        });
+        assert.deepEqual((yield* engine.getThreadProjection(ownerId)).thread.threadWatches, []);
+        yield* engine.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("watch-target-message"),
+          threadId: targetId,
+          messageId: MessageId.make("watch-target-message"),
+          text: "Build",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const run = (yield* engine.getThreadProjection(targetId)).runs[0]!;
+        yield* engine.dispatch({
+          type: "thread.watch",
+          commandId: CommandId.make("watch-persistent"),
+          threadId: ownerId,
+          targetThreadId: targetId,
+          watching: true,
+          until: "settled",
+        });
+        yield* engine.dispatch({
+          type: "thread.watch",
+          commandId: CommandId.make("watch-reciprocal"),
+          threadId: targetId,
+          targetThreadId: ownerId,
+          watching: true,
+          until: "settled",
+        });
+        const now = yield* DateTime.now;
+        const request = {
+          id: RuntimeRequestId.make("watch-question"),
+          nodeId: run.rootNodeId!,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: { type: "message" },
+          createdAt: now,
+          resolvedAt: null,
+        } as const;
+        yield* sink.write({
+          commandId: CommandId.make("watch-question"),
+          events: [
+            {
+              id: EventId.make("watch-question"),
+              type: "runtime-request.updated",
+              threadId: targetId,
+              runId: run.id,
+              occurredAt: now,
+              payload: request,
+            },
+          ],
+        });
+        const reactor = yield* ThreadWatchReactor.make;
+        yield* reactor.sweep;
+        const notices = () =>
+          engine
+            .getThreadProjection(ownerId)
+            .pipe(
+              Effect.map((projection) =>
+                projection.messages.filter(
+                  (message) => message.notification?.source.kind === "monitor",
+                ),
+              ),
+            );
+        assert.equal((yield* notices()).length, 1);
+        assert.match((yield* notices())[0]!.text, /has a question/);
+        const source = (yield* notices())[0]!.notification?.source;
+        assert.deepEqual(
+          source?.kind === "monitor" ? source.threadWatch?.causalThreadIds : undefined,
+          [targetId, ownerId],
+        );
+        const quietSequence = yield* sink.latestSequence();
+        yield* reactor.sweep;
+        yield* reactor.sweep;
+        assert.equal(yield* sink.latestSequence(), quietSequence);
+        const restarted = yield* ThreadWatchReactor.make;
+        yield* restarted.sweep;
+        assert.equal((yield* notices()).length, 1);
+        yield* sink.write({
+          commandId: CommandId.make("watch-question-again"),
+          events: [
+            {
+              id: EventId.make("watch-question-again"),
+              type: "runtime-request.updated",
+              threadId: targetId,
+              runId: run.id,
+              occurredAt: now,
+              payload: request,
+            },
+          ],
+        });
+        yield* restarted.sweep;
+        assert.equal((yield* notices()).length, 1);
+        yield* sink.write({
+          commandId: CommandId.make("watch-source-finish"),
+          events: [
+            {
+              id: EventId.make("watch-answer"),
+              type: "runtime-request.updated",
+              threadId: targetId,
+              runId: run.id,
+              occurredAt: now,
+              payload: { ...request, status: "resolved", resolvedAt: now },
+            },
+            {
+              id: EventId.make("watch-source-finish"),
+              type: "run.updated",
+              threadId: targetId,
+              runId: run.id,
+              occurredAt: now,
+              payload: { ...run, status: "completed", completedAt: now },
+            },
+          ],
+        });
+        yield* restarted.sweep;
+        yield* reactor.sweep;
+        assert.equal((yield* notices()).length, 2);
+        assert.equal(
+          (yield* engine.getThreadProjection(ownerId)).thread.threadWatches?.[0]?.ended,
+          false,
+        );
+        const oldWatch = (yield* engine.getThreadProjection(ownerId)).thread.threadWatches![0]!;
+        const queuedMessageId = (yield* notices())[1]!.id;
+        yield* engine.dispatch({
+          type: "thread.watch",
+          commandId: CommandId.make("watch-remove"),
+          threadId: ownerId,
+          targetThreadId: targetId,
+          watching: false,
+        });
+        assert.equal(
+          (yield* engine.getThreadProjection(ownerId)).runs.find(
+            (queued) => queued.userMessageId === queuedMessageId,
+          )?.status,
+          "cancelled",
+        );
+        yield* engine.dispatch({
+          type: "thread.watch.sync",
+          commandId: CommandId.make("watch-late-sync"),
+          threadId: ownerId,
+          expectedCursor: oldWatch.progress!.cursor,
+          watch: oldWatch,
+          wake: {
+            messageId: MessageId.make("watch-late-sync"),
+            text: "Must not wake a stopped watch",
+            notification: { source: { kind: "monitor" }, outcome: "updated", summary: "Late wake" },
+          },
+        });
+        assert.equal((yield* notices()).length, 2);
+        yield* engine.dispatch({
+          type: "thread.watch",
+          commandId: CommandId.make("watch-finished-baseline"),
+          threadId: ownerId,
+          targetThreadId: targetId,
+          watching: true,
+        });
+        yield* restarted.sweep;
+        assert.equal((yield* notices()).length, 3);
+        assert.equal(
+          (yield* engine.getThreadProjection(ownerId)).thread.threadWatches?.[0]?.ended,
+          true,
+        );
+        yield* restarted.sweep;
+        assert.equal((yield* notices()).length, 3);
+        yield* engine.dispatch({
+          type: "thread.watch",
+          commandId: CommandId.make("watch-loop-guard"),
+          threadId: ownerId,
+          targetThreadId: targetId,
+          watching: true,
+          until: "settled",
+        });
+        for (const origin of ["loop", "monitor", "user"] as const) {
+          const messageId = MessageId.make(`watch-next-${origin}`);
+          yield* engine.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(messageId),
+            threadId: targetId,
+            messageId,
+            text: "Another turn",
+            attachments: [],
+            dispatchMode: {
+              type: origin !== "user" ? "queue_after_active" : "start_immediately",
+            },
+            createdBy: origin !== "user" ? "agent" : "user",
+            creationSource: "server",
+            ...(origin !== "user"
+              ? {
+                  notification: {
+                    source: {
+                      kind: "monitor" as const,
+                      ...(origin === "loop"
+                        ? {
+                            threadWatch: {
+                              id: CommandId.make("watch-reciprocal"),
+                              threadId: ownerId,
+                              causalThreadIds: [ownerId, targetId],
+                            },
+                          }
+                        : {}),
+                    },
+                    outcome: "updated" as const,
+                    summary: "Other monitor",
+                  },
+                }
+              : {}),
+          });
+          const nextRun = (yield* engine.getThreadProjection(targetId)).runs.find(
+            (candidate) => candidate.userMessageId === messageId,
+          )!;
+          yield* sink.write({
+            commandId: CommandId.make(`watch-next-${origin}-finished`),
+            events: [
+              {
+                id: EventId.make(`watch-next-${origin}-finished`),
+                type: "run.updated",
+                threadId: targetId,
+                runId: nextRun.id,
+                occurredAt: now,
+                payload: { ...nextRun, status: "completed", completedAt: now },
+              },
+            ],
+          });
+          yield* restarted.sweep;
+          assert.equal(
+            (yield* notices()).length,
+            origin === "loop" ? 3 : origin === "monitor" ? 4 : 5,
+          );
+        }
+        assert.equal(
+          (yield* engine.getThreadProjection(ownerId)).thread.threadWatches?.[0]?.ended,
+          false,
+        );
+        yield* restarted.sweep;
+        assert.equal((yield* notices()).length, 5);
+      }),
+  );
+
   const seedFailingRollbackThread = (name: string) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

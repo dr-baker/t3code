@@ -121,13 +121,17 @@ function backgroundWorkKindHoldsCompletion(kind: PendingBackgroundWorkTask["kind
 }
 
 const PULL_REQUEST_WATCH_TASK_ID = "pull-request-watch:";
+const THREAD_WATCH_TASK_ID = "thread-watch:";
 
 export const isPullRequestWatchTask = (task: Pick<PendingBackgroundWorkTask, "taskId">) =>
   task.taskId.startsWith(PULL_REQUEST_WATCH_TASK_ID);
 
+export const isThreadWatchTask = (task: Pick<PendingBackgroundWorkTask, "taskId">) =>
+  task.taskId.startsWith(THREAD_WATCH_TASK_ID);
+
 /**
- * A monitor wakes the agent once per line, so a progress wake run's completion waits for the
- * monitor to end. A pull request watch wakes only on news and holds while its checks run.
+ * A line monitor holds a progress wake until it ends; durable status watches
+ * decide separately when their work holds completion.
  */
 export function monitorHoldsWakeCompletion(
   thread: Pick<OrchestrationV2ThreadShell, "latestRunBackgroundWake" | "pendingBackgroundTasks">,
@@ -135,7 +139,8 @@ export function monitorHoldsWakeCompletion(
   return (
     thread.latestRunBackgroundWake === true &&
     (thread.pendingBackgroundTasks ?? []).some(
-      (task) => task.kind === "monitor" && !isPullRequestWatchTask(task),
+      (task) =>
+        task.kind === "monitor" && !isPullRequestWatchTask(task) && !isThreadWatchTask(task),
     )
   );
 }
@@ -267,6 +272,7 @@ export function derivePendingBackgroundWork(input: {
   /** Excludes rolled-back runs; optional only when the caller already filtered them, as SQL shell reads do. */
   readonly runs?: ReadonlyArray<PendingBackgroundWorkRun>;
   readonly pullRequests?: ReadonlyArray<PendingBackgroundWorkPullRequest> | undefined;
+  readonly threadWatches?: OrchestrationV2ThreadShell["threadWatches"];
 }): ReadonlyArray<PendingBackgroundWorkTask> {
   const hasActiveRun =
     input.hasActiveRun ??
@@ -278,7 +284,7 @@ export function derivePendingBackgroundWork(input: {
     return [];
   }
   if (input.latestRun == null) {
-    return pullRequestWatchTasks(input.pullRequests);
+    return [...pullRequestWatchTasks(input.pullRequests), ...threadWatchTasks(input.threadWatches)];
   }
   if (!isLatestRunSettledForBackgroundWait(input.latestRun)) {
     return [];
@@ -319,6 +325,8 @@ export function derivePendingBackgroundWork(input: {
 
   for (const task of pullRequestWatchTasks(input.pullRequests)) byTaskId.set(task.taskId, task);
 
+  for (const task of threadWatchTasks(input.threadWatches)) byTaskId.set(task.taskId, task);
+
   // Follow-up tasks can share a child thread; the pending list counts agents, not messages.
   const childThreadIds = new Set<ThreadId>();
   return Array.from(byTaskId.values()).filter((task) => {
@@ -353,4 +361,17 @@ function pullRequestWatchTasks(
           },
         ],
   );
+}
+
+function threadWatchTasks(
+  watches: OrchestrationV2ThreadShell["threadWatches"],
+): Array<PendingBackgroundWorkTask> {
+  return (watches ?? [])
+    .filter((watch) => !watch.ended)
+    .map((watch) => ({
+      taskId: `${THREAD_WATCH_TASK_ID}${watch.threadId}`,
+      description: `Watching ${watch.title}`,
+      kind: "monitor",
+      ...(watch.until === "turn" || watch.workPending !== false ? { awaited: true as const } : {}),
+    }));
 }

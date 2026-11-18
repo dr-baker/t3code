@@ -472,6 +472,39 @@ const OrchestrationV2LastTitleRegeneration = Schema.Struct({
   completedAt: Schema.DateTimeUtc,
 });
 
+export const THREAD_WATCH_LIMITS = {
+  registrations: 20,
+  reportedChanges: 64,
+  causalHops: 20,
+} as const;
+
+export const ThreadWatch = Schema.Struct({
+  until: Schema.Literals(["turn", "settled"]),
+  id: CommandId,
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  ended: Schema.Boolean,
+  workPending: Schema.optional(Schema.Boolean),
+  progress: Schema.optional(
+    Schema.Struct({
+      cursor: NonNegativeInt,
+      reported: Schema.Array(Schema.String).check(
+        Schema.isMaxLength(THREAD_WATCH_LIMITS.reportedChanges),
+      ),
+      baselinePending: Schema.Boolean,
+    }),
+  ),
+});
+export type ThreadWatch = typeof ThreadWatch.Type;
+
+const ThreadWatchStamp = Schema.Struct({
+  id: CommandId,
+  threadId: ThreadId,
+  causalThreadIds: Schema.optional(
+    Schema.Array(ThreadId).check(Schema.isMaxLength(THREAD_WATCH_LIMITS.causalHops)),
+  ),
+});
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -485,6 +518,9 @@ export const OrchestrationV2AppThread = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
+  threadWatches: Schema.optional(
+    Schema.Array(ThreadWatch).check(Schema.isMaxLength(THREAD_WATCH_LIMITS.registrations)),
+  ),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   /** Issues linked to this thread; optional so pre-linking servers still decode. */
   issues: Schema.optional(Schema.Array(ThreadIssueLink)),
@@ -1454,6 +1490,7 @@ export const OrchestrationV2NotificationSource = kindUnionWithFallback(
     CommandNotificationSource,
     Schema.Struct({
       kind: Schema.Literal("monitor"),
+      threadWatch: Schema.optional(ThreadWatchStamp),
       pullRequest: Schema.optional(MonitorPullRequestStamp),
       /** The other pull requests one wake covers; outdated ones leave it before it starts. */
       otherPullRequests: Schema.optional(Schema.Array(MonitorPullRequestStamp)),
@@ -2152,6 +2189,11 @@ export const OrchestrationV2DomainEvent = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("thread.watches-updated"),
+    payload: Schema.Array(ThreadWatch).check(Schema.isMaxLength(THREAD_WATCH_LIMITS.registrations)),
+  }),
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
     type: Schema.Literal("thread.pull-request-link-updated"),
     payload: ThreadPullRequestLink,
   }),
@@ -2363,6 +2405,18 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
+  threadWatches: Schema.optional(
+    Schema.Array(
+      ThreadWatch.mapFields(({ id, threadId, title, ended, until, workPending }) => ({
+        id,
+        threadId,
+        title,
+        ended,
+        until,
+        workPending,
+      })),
+    ).check(Schema.isMaxLength(THREAD_WATCH_LIMITS.registrations)),
+  ),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   /** Issues linked to this thread; optional so pre-linking servers still decode. */
   issues: Schema.optional(Schema.Array(ThreadIssueLink)),
@@ -3120,6 +3174,11 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2JsonEventBaseFields,
+    type: Schema.Literal("thread.watches-updated"),
+    payload: Schema.Array(ThreadWatch).check(Schema.isMaxLength(THREAD_WATCH_LIMITS.registrations)),
+  }),
+  Schema.Struct({
+    ...OrchestrationV2JsonEventBaseFields,
     type: Schema.Literal("thread.pull-request-link-updated"),
     payload: ThreadPullRequestLink,
   }),
@@ -3477,6 +3536,14 @@ export const OrchestrationV2Command = Schema.Union([
     ...ThreadIssueKey.fields,
   }),
   Schema.Struct({
+    type: Schema.Literal("thread.watch"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    targetThreadId: ThreadId,
+    watching: Schema.Boolean,
+    until: Schema.optional(Schema.Literals(["turn", "settled"])),
+  }),
+  Schema.Struct({
     type: Schema.Literal("thread.pull-request.watch"),
     commandId: CommandId,
     threadId: ThreadId,
@@ -3830,6 +3897,21 @@ const OrchestrationV2InternalCommand = Schema.Union([
     type: Schema.Literal("thread.pull-request-watch.checks-reopen"),
     commandId: CommandId,
     threadId: ThreadId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.watch.sync"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    expectedCursor: NonNegativeInt,
+    watch: ThreadWatch,
+    wake: Schema.optional(
+      Schema.Struct({
+        messageId: MessageId,
+        text: Schema.String,
+        notification: OrchestrationV2Notification,
+        causalThreadIds: ThreadWatchStamp.fields.causalThreadIds,
+      }),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request-watch.sync"),

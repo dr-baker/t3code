@@ -64,6 +64,7 @@ import {
   moveThreadProject,
   visitThread,
   watchThreadPullRequest,
+  watchThread,
 } from "../operations/commands.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -317,6 +318,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     unlinkPullRequest: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:unlink-pull-request",
       execute: unlinkThreadPullRequest,
+      scheduler,
+      concurrency,
+    }),
+    watchThread: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:watch-thread",
+      execute: watchThread,
       scheduler,
       concurrency,
     }),
