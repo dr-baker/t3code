@@ -68,7 +68,7 @@ const forkCases = (
   return { driver, status, instanceId, modelSelection, adapter, layer };
 });
 
-it.effect("a persisted fork leaves PR watching with its parent until explicitly opted in", () =>
+it.effect("forks leave watch registrations with their parent", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const eventSink = yield* EventSink.EventSinkV2;
@@ -130,10 +130,19 @@ it.effect("a persisted fork leaves PR watching with its parent until explicitly 
       watching: true,
       link,
     });
+    const watchedThreadId = ThreadId.make("fork-watched-thread");
+    yield* createParent(watchedThreadId);
+    yield* orchestrator.dispatch({
+      type: "thread.watch",
+      commandId: CommandId.make("fork-watch-owner"),
+      threadId: sourceThreadId,
+      targetThreadId: watchedThreadId,
+      watching: true,
+    });
     const parentBefore = yield* orchestrator.getThreadShell(sourceThreadId);
     const parentWatch = parentBefore?.pullRequests?.[0]?.watch;
     assert.isDefined(parentWatch);
-    assert.lengthOf(parentBefore?.pendingBackgroundTasks ?? [], 1);
+    assert.lengthOf(parentBefore?.pendingBackgroundTasks ?? [], 2);
 
     yield* orchestrator.dispatch({
       type: "thread.fork",
@@ -155,6 +164,8 @@ it.effect("a persisted fork leaves PR watching with its parent until explicitly 
         stack: null,
       },
     ]);
+    assert.lengthOf(parentBefore?.threadWatches ?? [], 1);
+    assert.lengthOf(fork.threadWatches ?? [], 0);
     assert.deepEqual(fork.pendingBackgroundTasks, []);
     assert.deepEqual(yield* orchestrator.getThreadShell(sourceThreadId), parentBefore);
 
@@ -1386,6 +1397,15 @@ it.effect.each(["recorded", "missing", "lost before startup"] as const)(
         },
       });
       yield* createParent(threadId);
+      const watchedThreadId = ThreadId.make("rewrite-watched-thread");
+      yield* createParent(watchedThreadId);
+      yield* orchestrator.dispatch({
+        type: "thread.watch",
+        commandId: CommandId.make("rewrite-watch-owner"),
+        threadId,
+        targetThreadId: watchedThreadId,
+        watching: true,
+      });
       yield* writeParentRun({
         threadId,
         runId,
@@ -1427,6 +1447,12 @@ it.effect.each(["recorded", "missing", "lost before startup"] as const)(
       const parent = yield* orchestrator.getThreadProjection(threadId);
       const candidates = parent.runs.find((run) => run.id === runId)?.rewrites?.candidates ?? [];
       assert.lengthOf(candidates, 2);
+      assert.lengthOf(parent.thread.threadWatches ?? [], 1);
+      for (const candidate of candidates) {
+        const child = yield* orchestrator.getThreadShell(candidate.threadId);
+        assert.isNotNull(child);
+        assert.lengthOf(child.threadWatches ?? [], 0);
+      }
       boundaryLost = nativeBoundary === "lost before startup";
       yield* worker.drain();
       for (const candidate of candidates) {

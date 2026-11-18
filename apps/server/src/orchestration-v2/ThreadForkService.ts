@@ -109,6 +109,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
         pullRequests: input.sourceProjection.thread.pullRequests?.map(
           ({ watch: _watch, ...link }) => link,
         ),
+        threadWatches: [],
         createdBy: input.createdBy,
         creationSource: input.creationSource,
         id: input.targetThreadId,
