@@ -1,3 +1,4 @@
+import { isThreadWatchTask } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { useAtomValue } from "@effect/atom-react";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -11,6 +12,7 @@ import { msg, T, useGT, useMessages } from "gt-react-native";
 import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { ThreadWatches } from "./ThreadWatches";
 import { SheetHeader } from "../../components/ui/SheetHeader";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -35,7 +37,10 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
   const thread = useAtomValue(
     environmentThreadShells.threadShellAtom(scopeThreadRef(target.environmentId, target.threadId)),
   );
-  const presentation = presentPendingBackgroundWork(thread?.pendingBackgroundTasks ?? [], m);
+  const presentation = presentPendingBackgroundWork(
+    (thread?.pendingBackgroundTasks ?? []).filter((task) => !isThreadWatchTask(task)),
+    m,
+  );
   const openThread = (threadId: ThreadId) => {
     void Haptics.selectionAsync();
     // A thread replaces the leaf sheet so workspace back navigation still works.
@@ -51,9 +56,14 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
       contentContainerClassName="px-5 pb-6"
       contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 8 }}
     >
+      <ThreadWatches
+        environmentId={target.environmentId}
+        threadId={target.threadId}
+        onOpen={openThread}
+      />
       {presentation === null ? (
         <Text className="pt-6 text-center text-sm text-foreground-muted">
-          <T>Nothing running in the background.</T>
+          No other background work.
         </Text>
       ) : (
         presentation.items.map((item) => (

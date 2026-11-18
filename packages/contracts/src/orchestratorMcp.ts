@@ -37,6 +37,7 @@ import { hasOnlyPairedSurrogates } from "./threadMetadataMcp.ts";
 import { LastThreadTitleRegeneration, ThreadTitleRegeneration } from "./threadTitle.ts";
 import {
   OrchestrationV2Actor,
+  OrchestrationV2ThreadShell,
   OrchestrationV2CreationSource,
   OrchestrationV2DelegatedFrom,
   OrchestrationV2RunStatus,
@@ -423,6 +424,7 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   blockedOnThreadWait: Schema.optional(Schema.Boolean),
   /** Absent from linked environments that predate it. */
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
+  threadWatches: OrchestrationV2ThreadShell.fields.threadWatches,
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   /** The linked environment's thread that delegated this one; absent otherwise. */
@@ -500,6 +502,7 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   blockedOnThreadWait: Schema.optional(Schema.Boolean),
   /** Absent from linked environments that predate it. */
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
+  threadWatches: OrchestrationV2ThreadShell.fields.threadWatches,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

@@ -19,6 +19,7 @@ export function ThreadHeader(props: {
   readonly subtitle: string;
   readonly gitControls: ThreadGitControlsProps;
   readonly onReturnToThread?: () => void;
+  readonly onOpenThreadWatches?: (() => void) | undefined;
   readonly draft?: boolean;
   readonly hasThreadCwd: boolean;
   readonly inspectorMode: ThreadInspectorMode | null;
@@ -44,6 +45,13 @@ export function ThreadHeader(props: {
         },
       ]
     : [];
+  if (props.onOpenThreadWatches !== undefined)
+    actions.push({
+      accessibilityLabel: "Thread watches",
+      icon: "eye",
+      overflowOnly: true,
+      onPress: props.onOpenThreadWatches,
+    });
   const menus = [gitMenu, terminalMenu].filter((menu): menu is AppBarMenu => menu !== null);
 
   return (

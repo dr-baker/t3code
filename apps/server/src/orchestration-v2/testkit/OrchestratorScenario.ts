@@ -167,6 +167,7 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "thread.issue.link":
     case "thread.issue.unlink":
     case "thread.pull-request.watch":
+    case "thread.watch":
     case "thread.pull-request.sync":
     case "thread.title.regeneration.complete":
     case "thread.runtime-mode.set":

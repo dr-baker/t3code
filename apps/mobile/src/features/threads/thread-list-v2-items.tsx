@@ -1428,6 +1428,21 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {thread.title}
         </Text>
         <View className="flex-row items-center gap-1.5" style={{ minHeight: titleLineHeight }}>
+          {(thread.threadWatches?.filter((watch) => !watch.ended).length ?? 0) > 0 ? (
+            <View
+              className="flex-row items-center gap-1"
+              accessibilityLabel={`Watching ${thread.threadWatches?.filter((watch) => !watch.ended).length} threads`}
+            >
+              <SymbolView
+                name="eye"
+                size={12}
+                tintColorClassName={rowAppearance.mutedIconTintClassName}
+              />
+              <Text className="text-xs text-foreground-muted">
+                {thread.threadWatches?.filter((watch) => !watch.ended).length}
+              </Text>
+            </View>
+          ) : null}
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
           {pinnedRow ? (
             <SymbolView

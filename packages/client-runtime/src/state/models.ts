@@ -196,6 +196,7 @@ export interface EnvironmentThreadShell {
   readonly pinOrderKey: string | null;
   readonly activeOrderKey: string | null;
   readonly pullRequests: ReadonlyArray<import("@t3tools/contracts").ThreadPullRequestLink>;
+  readonly threadWatches?: OrchestrationV2ThreadShell["threadWatches"];
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
   readonly branchPullRequest?: ThreadLinkedPullRequest | null;
   /** Absent from rows built before issue linking; the server sends an empty list. */
@@ -312,6 +313,7 @@ export function presentThreadShell(
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     pullRequests: threadPullRequestsOf(thread),
+    threadWatches: thread.threadWatches,
     linkedPullRequest: thread.linkedPullRequest ?? null,
     branchPullRequest: thread.branchPullRequest ?? null,
     issues: thread.issues ?? [],

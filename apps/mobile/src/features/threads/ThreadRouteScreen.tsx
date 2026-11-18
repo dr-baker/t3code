@@ -1054,6 +1054,16 @@ function ThreadRouteContent(
             props.inspectorPresentation ? null : (
               <ThreadHeader
                 title={selectedThread.title}
+                onOpenThreadWatches={
+                  routeEnvironmentRuntime?.serverConfig?.environment.capabilities.threadWatch ===
+                  true
+                    ? () =>
+                        navigation.navigate("ThreadBackgroundWork", {
+                          environmentId: selectedThread.environmentId,
+                          threadId: selectedThread.id,
+                        })
+                    : undefined
+                }
                 subtitle={threadStatusLabel ?? headerSubtitle}
                 gitControls={threadGitControlProps}
                 hasThreadCwd={selectedThreadCwd !== null}

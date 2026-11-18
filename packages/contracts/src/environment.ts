@@ -152,6 +152,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   previewTunnelSetting: Schema.optionalKey(Schema.Boolean),
   threadPullRequests: Schema.optionalKey(Schema.Boolean),
   threadPullRequestWatch: Schema.optionalKey(Schema.Boolean),
+  threadWatch: Schema.optionalKey(Schema.Boolean),
   pullRequestStackActions: Schema.optionalKey(Schema.Boolean),
   serverSelfUpdate: Schema.optionalKey(ServerSelfUpdateCapability),
   /** Server answers server.getNpmRelease using its configured npm registry. */
