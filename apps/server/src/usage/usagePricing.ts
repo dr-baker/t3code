@@ -14,6 +14,8 @@ import {
 
 import type { UsageRecord, UsageSpeed } from "@t3tools/provider-core/server/usage";
 
+import fallbackPrices from "./usagePriceFallbacks.json" with { type: "json" };
+
 export interface TokenRates {
   readonly inputCostPerToken: number;
   readonly outputCostPerToken: number;
@@ -314,7 +316,7 @@ export function lookupRate(table: RateTable, model: string): ModelRate | null {
     rate = resolveRate(table, model);
     resolved.set(model, rate);
   }
-  return rate;
+  return rate ?? lookupFallbackRate(model);
 }
 
 /** A priceable model the table has no rate for; a newer table may list it. */
@@ -329,7 +331,37 @@ function resolveRate(table: RateTable, model: string): ModelRate | null {
   const key = stripVariantSuffix(normalizeRateKey(model));
   const bareName = bareModelName(key);
   if (bareName.length === 0 || UNPRICEABLE_MODELS.has(bareName)) return null;
-  return table.get(key) ?? null;
+  return table.get(key) ?? (fallbackRates.has(key) ? table.get(bareName) : null) ?? null;
+}
+
+const fallbackRates = parseRateTable(fallbackPrices.models);
+const fallbackPromotionEndsAt = Date.parse(fallbackPrices.ultrafastPromotion.endsAt);
+const withoutUltrafastPromotion = (rate: SpeedRates): SpeedRates => ({
+  ...rate,
+  ultrafast:
+    rate.ultrafast === null
+      ? null
+      : scaleTokenRates(rate.ultrafast, fallbackPrices.ultrafastPromotion.listPriceMultiplier),
+});
+const fallbackListRates: RateTable = new Map(
+  [...fallbackRates].map(([model, rate]) => [
+    model,
+    {
+      ...withoutUltrafastPromotion(rate),
+      contextTiers: rate.contextTiers.map((tier) => ({
+        ...tier,
+        rate: withoutUltrafastPromotion(tier.rate),
+      })),
+    },
+  ]),
+);
+
+function lookupFallbackRate(model: string): ModelRate | null {
+  const key = stripVariantSuffix(normalizeRateKey(model));
+  if (!fallbackRates.has(key)) return null;
+  // @effect-diagnostics-next-line globalDate:off
+  const rates = Date.now() < fallbackPromotionEndsAt ? fallbackRates : fallbackListRates;
+  return rates.get(key) ?? null;
 }
 
 export type PricedRecord = Pick<

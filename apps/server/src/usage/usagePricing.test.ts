@@ -1,5 +1,6 @@
 import { RunId, RunAttemptId, ProviderInstanceId, type TurnTokenUsage } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 
 import { cursorRateModel } from "@t3tools/provider-cursor/server/accountUsage";
 import type { UsageSpeed } from "@t3tools/provider-core/server/usage";
@@ -203,6 +204,60 @@ describe("usage pricing", () => {
       6 * cacheSavingsUsd(table, record("gpt-6-astra")),
     );
     expect(cost("gpt-6-sol", "ultrafast")).toBe(cost("gpt-6-sol", "standard"));
+  });
+
+  it("prices GPT-6.2 Astra while the public feed has no entry and prefers refreshed rates", () => {
+    using now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2027-03-01T07:59:59Z"));
+    const table = parseRateTable({});
+    const request = (model: string, prompt: number, speed: UsageSpeed) => ({
+      model,
+      speed,
+      reportedCostUsd: null,
+      totals: {
+        uncachedInputTokens: prompt - 200_000,
+        cachedInputTokens: 200_000,
+        cacheCreationTokens: 0,
+        outputTokens: 1_000,
+        reasoningTokens: 500,
+      },
+    });
+    for (const model of ["gpt-6.2-astra", "openai/gpt-6.2-astra"]) {
+      for (const [speed, multiple] of [
+        ["standard", 1],
+        ["fast", 2],
+        ["ultrafast", 3],
+      ] as const) {
+        expect(priceUsage(table, request(model, 272_000, speed))).toMatchObject({
+          costSource: "modelPriced",
+          costUsd: expect.closeTo(0.696 * multiple),
+        });
+        expect(priceUsage(table, request(model, 272_001, speed)).costUsd).toBeCloseTo(
+          1.372016 * multiple,
+        );
+      }
+    }
+    expect(cacheSavingsUsd(table, request("gpt-6.2-astra", 272_000, "standard"))).toBeCloseTo(1.52);
+    expect(priceUsage(table, record("gpt-6.2-astra")).costUsd).toBeCloseTo(96.8);
+    expect(
+      priceUsage(table, request("reseller/gpt-6.2-astra", 272_000, "standard")).costSource,
+    ).toBe("unpriced");
+    const refreshed = parseRateTable({ "gpt-6.2-astra": rate(1e-6, 1e-7) });
+    expect(
+      priceUsage(refreshed, request("gpt-6.2-astra", 272_000, "standard")).costUsd,
+    ).toBeCloseTo(0.097);
+    expect(
+      priceUsage(refreshed, request("openai/gpt-6.2-astra", 272_000, "standard")).costUsd,
+    ).toBeCloseTo(0.097);
+    now.mockReturnValue(Date.parse("2027-03-01T08:00:00Z"));
+    expect(priceUsage(table, request("gpt-6.2-astra", 272_000, "ultrafast")).costUsd).toBeCloseTo(
+      0.696 * 6,
+    );
+    expect(priceUsage(table, request("gpt-6.2-astra", 272_001, "ultrafast")).costUsd).toBeCloseTo(
+      1.372016 * 6,
+    );
+    expect(priceUsage(table, request("gpt-6.2-astra", 272_000, "fast")).costUsd).toBeCloseTo(
+      0.696 * 2,
+    );
   });
 
   it("prices a request above the model's long-context threshold at its above-tier rates", () => {
