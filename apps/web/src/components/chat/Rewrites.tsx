@@ -1,4 +1,5 @@
 import { useAtom, useAtomValue } from "@effect/atom-react";
+import { resolveProviderInstanceDisplayName } from "@t3tools/client-runtime/state/provider-instance-display";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -9,19 +10,20 @@ import {
   type OrchestrationV2Run,
   type RunId,
   type ScopedThreadRef,
+  type ServerProvider,
   type ThreadId,
 } from "@t3tools/contracts";
-import { rewriteModelLabel } from "@t3tools/shared/model";
+import { formatModelSlugName } from "@t3tools/shared/model";
 import { Atom } from "effect/reactivity";
-import { PenLineIcon } from "lucide-react";
-import { useState } from "react";
+import { ChevronRightIcon, PenLineIcon } from "lucide-react";
+import { type ReactNode, useState } from "react";
 
 import { useLongLivedAssetUrl } from "../../assets/longLivedAssetUrls";
-import { useRightPanelStore } from "../../rightPanelStore";
+import { selectThreadRightPanelState, useRightPanelStore } from "../../rightPanelStore";
 import { isImageAttachment, type ChatAttachment } from "../../types";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { randomUUID } from "../../lib/utils";
+import { cn, randomUUID } from "../../lib/utils";
 import { deriveTimelineEntriesFromVisibleTurnItems } from "../../session-logic";
 import {
   useProject,
@@ -35,15 +37,103 @@ import { serverEnvironment } from "../../state/server";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
-import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
-import { WorkLogList, WorkLogRow } from "./WorkLog";
+import { Skeleton } from "../ui/skeleton";
 import { workEntryDisplayLabel } from "./MessagesTimeline.logic";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
+import { getDisplayModelName } from "./providerIconUtils";
 
 export type AnswerRef = { threadRef: ScopedThreadRef; runId: RunId };
 export type RewriteGroup = NonNullable<OrchestrationV2Run["rewrites"]>;
+
+export interface RewriteModelDisplay {
+  readonly provider: ServerProvider | undefined;
+  readonly modelLabel: string;
+  readonly providerLabel: string;
+  readonly traits: ReadonlyArray<string>;
+  readonly subtitle: string;
+  readonly inlineLabel: string;
+}
+
+export function resolveRewriteModelDisplay(
+  selection: ModelSelection,
+  providers: ReadonlyArray<ServerProvider> | undefined,
+): RewriteModelDisplay {
+  const { model, options, instanceId } = selection;
+  const provider = providers?.find((entry) => entry.instanceId === instanceId);
+  const catalogModel = provider?.models.find((entry) => entry.slug === model);
+  const modelLabel = catalogModel ? getDisplayModelName(catalogModel) : formatModelSlugName(model);
+  const providerLabel = provider ? resolveProviderInstanceDisplayName(provider) : instanceId;
+  const traits =
+    options?.map(({ id, value }) => {
+      const descriptor = catalogModel?.capabilities?.optionDescriptors?.find(
+        (entry) => entry.id === id,
+      );
+      if (typeof value === "boolean") return `${descriptor?.label ?? id} ${value ? "on" : "off"}`;
+      return descriptor?.type === "select"
+        ? (descriptor.options.find((option) => option.id === value)?.label ?? value)
+        : value;
+    }) ?? [];
+  return {
+    provider,
+    modelLabel,
+    providerLabel,
+    traits,
+    subtitle: [providerLabel, ...traits].join(" · "),
+    inlineLabel: [modelLabel, ...traits].join(" · "),
+  };
+}
+
+export function RewriteProviderIcon({
+  display,
+  className = "size-4",
+}: {
+  display: RewriteModelDisplay;
+  className?: string;
+}) {
+  const { provider, providerLabel } = display;
+  if (!provider) return null;
+  return (
+    <ProviderInstanceIcon
+      driverKind={provider.driver}
+      displayName={providerLabel}
+      accentColor={provider.accentColor}
+      {...(provider.driver === "acpRegistry" && provider.iconUrl
+        ? { acpRegistryIconUrl: provider.iconUrl }
+        : {})}
+      size="compact"
+      className={className}
+      iconClassName={className}
+    />
+  );
+}
+
+export function useRewriteCopyText(threadRef: ScopedThreadRef | null, runId: RunId): string {
+  const projection = useQuietThreadProjection(threadRef)?.projection;
+  const items = useThreadVisibleTurnItems(threadRef);
+  if (!threadRef) return "";
+  const runItems = items.filter(
+    ({ sourceThreadId, item }) => sourceThreadId === threadRef.threadId && item.runId === runId,
+  );
+  const entries = deriveTimelineEntriesFromVisibleTurnItems({
+    visibleTurnItems: runItems,
+    optimisticMessages: [],
+    plans: projection?.plans ?? [],
+  });
+  const parts: string[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "message" && entry.message.role === "assistant" && entry.message.text) {
+      parts.push(entry.message.text);
+    } else if (entry.kind === "sent-message" && entry.text) {
+      parts.push(entry.text);
+    } else if (entry.kind === "proposed-plan" && entry.proposedPlan.planMarkdown) {
+      parts.push(entry.proposedPlan.planMarkdown);
+    }
+  }
+  return parts.join("\n\n");
+}
 
 function RewriteAttachment({
   threadRef,
@@ -68,12 +158,29 @@ function RewriteAttachment({
   );
 }
 
+function RewriteWaitingSkeleton() {
+  return (
+    <div role="status" className="space-y-2.5 py-1">
+      <span className="sr-only">Waiting for the answer…</span>
+      <Skeleton shape="pill" className="h-2.5 w-4/5" />
+      <Skeleton shape="pill" className="h-2.5 w-full" />
+      <Skeleton shape="pill" className="h-2.5 w-3/5" />
+    </div>
+  );
+}
+
 export function RewriteOutput({
   threadRef,
   runId,
   attribution,
   showActivity = false,
-}: AnswerRef & { attribution?: ModelSelection; showActivity?: boolean }) {
+  actions,
+}: AnswerRef & {
+  attribution?: ModelSelection;
+  showActivity?: boolean;
+  actions?: ReactNode;
+}) {
+  const config = useAtomValue(serverEnvironment.configValueAtom(threadRef.environmentId));
   const projection = useQuietThreadProjection(threadRef)?.projection;
   const project = useProject(
     projection
@@ -95,6 +202,9 @@ export function RewriteOutput({
   });
   const run = projection?.runs.find((item) => item.id === runId);
   const activity = showActivity ? entries.filter((entry) => entry.kind === "work") : [];
+  const attributionDisplay = attribution
+    ? resolveRewriteModelDisplay(attribution, config?.providers)
+    : null;
   const text: string[] = [];
   const output = entries.flatMap((entry) => {
     if (entry.kind === "html-render")
@@ -149,52 +259,77 @@ export function RewriteOutput({
       </div>,
     ];
   });
+  const isTerminalRun =
+    run?.status === "failed" ||
+    run?.status === "interrupted" ||
+    run?.status === "cancelled" ||
+    run?.status === "rolled_back" ||
+    run?.status === "completed" ||
+    run?.status === "waiting";
   return (
-    <div className="min-w-0 space-y-4">
-      {attribution && (
-        <div className="text-xs text-muted-foreground">
-          Rewrite · {rewriteModelLabel(attribution)}
+    <div className="min-w-0 space-y-3">
+      {attributionDisplay && (
+        <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <RewriteProviderIcon display={attributionDisplay} className="size-3.5" />
+          <span className="truncate">
+            Rewritten by{" "}
+            <span className="font-medium text-foreground/85">{attributionDisplay.inlineLabel}</span>
+          </span>
         </div>
       )}
       {!reachedRunStart && <EarlierRewriteHistory threadRef={threadRef} />}
       {activity.length > 0 && (
-        <div className="rounded-md bg-muted/30">
-          <CollapsibleSectionHeader
-            expanded={activityOpen}
+        <div className="min-w-0">
+          <button
+            type="button"
+            aria-expanded={activityOpen}
             onClick={() => setActivityOpen(!activityOpen)}
+            className="inline-flex cursor-pointer select-none items-center gap-1 rounded-md py-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
           >
-            Activity ({activity.length})
-          </CollapsibleSectionHeader>
+            <ChevronRightIcon
+              aria-hidden
+              className={cn(
+                "size-3.5 shrink-0 transition-transform duration-150",
+                activityOpen && "rotate-90",
+              )}
+            />
+            <span className="tabular-nums">Activity ({activity.length})</span>
+          </button>
           {activityOpen && (
-            <div className="max-h-48 overflow-y-auto px-2 pb-2">
-              <WorkLogList>
+            <div className="mt-1.5 ms-1.5 max-h-48 overflow-y-auto border-s border-border/60 ps-3">
+              <ul className="space-y-1 text-xs text-secondary-label">
                 {activity.map(({ id, entry }) => (
-                  <WorkLogRow
-                    key={id}
-                    label={workEntryDisplayLabel(entry, project?.workspaceRoot)}
-                  />
+                  <li key={id} className="truncate leading-relaxed">
+                    {workEntryDisplayLabel(entry, project?.workspaceRoot)}
+                  </li>
                 ))}
-              </WorkLogList>
+              </ul>
             </div>
           )}
         </div>
       )}
       {output}
-      {output.length === 0 && (
-        <p role="status" className="text-sm text-muted-foreground">
-          {run?.status === "failed"
-            ? "This rewrite failed."
-            : run?.status === "interrupted" ||
-                run?.status === "cancelled" ||
-                run?.status === "rolled_back"
-              ? "This rewrite was interrupted."
-              : run?.status === "completed" || run?.status === "waiting"
-                ? "This answer has no visible output."
-                : "Waiting for the answer…"}
-        </p>
-      )}
-      {attribution && text.length > 0 && (
-        <MessageCopyButton text={text.join("\n\n")} label="Copy rewrite" variant="ghost" />
+      {output.length === 0 &&
+        (isTerminalRun ? (
+          <p role="status" className="text-sm text-muted-foreground">
+            {run?.status === "failed"
+              ? "This rewrite failed."
+              : run?.status === "interrupted" ||
+                  run?.status === "cancelled" ||
+                  run?.status === "rolled_back"
+                ? "This rewrite was interrupted."
+                : "This answer has no visible output."}
+          </p>
+        ) : (
+          <RewriteWaitingSkeleton />
+        ))}
+      {((attribution && text.length > 0) || actions) && (
+        <div className="flex items-center gap-1.5 pt-0.5">
+          {attribution && text.length > 0 && (
+            <MessageCopyButton text={text.join("\n\n")} label="Copy rewrite" variant="ghost" />
+          )}
+          {actions}
+        </div>
       )}
     </div>
   );
@@ -283,18 +418,26 @@ export function RewriteButton({
 }: AnswerRef & { group?: RewriteGroup | undefined }) {
   const { canOperate, submit } = useRewriteCommand({ threadRef, runId }, !!group);
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(threadRef.environmentId));
+  const isPanelActive = useRightPanelStore((state) => {
+    const panel = selectThreadRightPanelState(state.byThreadKey, threadRef);
+    return panel.isOpen && panel.activeSurfaceId === `rewrites:${runId}`;
+  });
   return (
     <Button
       size="xs"
       variant="ghost-muted"
+      data-pressed={isPanelActive ? "" : undefined}
       disabled={!group && (!canOperate || !settings)}
       onClick={() => {
         useRightPanelStore.getState().openRewrites(threadRef, runId);
         if (!group && settings?.rewriteCouncil.length) void submit();
       }}
     >
-      <PenLineIcon />
+      <PenLineIcon className="size-3" />
       Rewrites
+      {group && group.candidates.length > 0 ? (
+        <span className="tabular-nums opacity-70">{group.candidates.length}</span>
+      ) : null}
     </Button>
   );
 }

@@ -1779,16 +1779,19 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 function TurnRewriteRow({ row }: { row: Extract<TimelineRow, { kind: "rewrite" }> }) {
   const { threadRef } = use(TimelineRowCtx);
   if (!threadRef) return null;
+  const trigger = <RewriteButton threadRef={threadRef} runId={row.runId} group={row.group} />;
   return (
-    <div className="space-y-2">
-      {row.selected && (
+    <div className="min-w-0 px-1 py-0.5">
+      {row.selected ? (
         <RewriteOutput
           threadRef={{ ...threadRef, threadId: row.selected.threadId }}
           runId={row.selected.runId}
           attribution={row.selected.modelSelection}
+          actions={trigger}
         />
+      ) : (
+        trigger
       )}
-      <RewriteButton threadRef={threadRef} runId={row.runId} group={row.group} />
     </div>
   );
 }

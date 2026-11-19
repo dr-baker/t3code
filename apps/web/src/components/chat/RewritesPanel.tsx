@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { resolveProviderInstanceDisplayName } from "@t3tools/client-runtime/state/provider-instance-display";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
 import type {
   OrchestrationV2RunStatus,
@@ -8,9 +7,15 @@ import type {
   ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
-import { formatModelSlugName } from "@t3tools/shared/model";
 import { Link } from "@tanstack/react-router";
-import { ArrowUpRightIcon, CheckIcon, ChevronDownIcon, PenLineIcon } from "lucide-react";
+import {
+  ArrowUpRightIcon,
+  CheckIcon,
+  ChevronRightIcon,
+  PenLineIcon,
+  SlidersHorizontalIcon,
+  XIcon,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { cn } from "../../lib/utils";
@@ -25,12 +30,17 @@ import { useEnvironmentShellHasSnapshot } from "../../state/shell";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
-import { getDisplayModelName } from "./providerIconUtils";
+import { ScrollArea } from "../ui/scroll-area";
 import { Spinner } from "../ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { MessageCopyButton } from "./MessageCopyButton";
 import {
   EarlierRewriteHistory,
   RewriteOutput,
+  RewriteProviderIcon,
+  resolveRewriteModelDisplay,
   useRewriteCommand,
+  useRewriteCopyText,
   type AnswerRef,
   type RewriteGroup,
 } from "./Rewrites";
@@ -51,14 +61,14 @@ const statusLabel = {
 function RewriteCard({
   parentRef,
   candidate,
-  provider,
+  providers,
   selected,
   canAdopt,
   onSelect,
 }: {
   parentRef: ScopedThreadRef;
   candidate: RewriteGroup["candidates"][number];
-  provider: ServerProvider | undefined;
+  providers: ReadonlyArray<ServerProvider>;
   selected: boolean;
   canAdopt: boolean;
   onSelect: (threadId: ThreadId) => void;
@@ -67,6 +77,7 @@ function RewriteCard({
   const shell = useQuietThreadShell(ref);
   const hasSnapshot = useEnvironmentShellHasSnapshot(parentRef.environmentId);
   const projection = useQuietThreadProjection(shell ? ref : null)?.projection;
+  const copyText = useRewriteCopyText(shell ? ref : null, candidate.runId);
   const status = projection?.runs.find((run) => run.id === candidate.runId)?.status;
   const ready = status === "completed" || status === "waiting";
   const needsInput = projection?.runtimeRequests.some(
@@ -74,83 +85,108 @@ function RewriteCard({
       request.status === "pending" &&
       projection.nodes.some((node) => node.id === request.nodeId && node.runId === candidate.runId),
   );
-  const { model, options, instanceId } = candidate.modelSelection;
-  const catalogModel = provider?.models.find((entry) => entry.slug === model);
-  const label = catalogModel ? getDisplayModelName(catalogModel) : formatModelSlugName(model);
-  const traits = options?.map(({ id, value }) => {
-    const descriptor = catalogModel?.capabilities?.optionDescriptors?.find(
-      (entry) => entry.id === id,
-    );
-    if (typeof value === "boolean") return `${descriptor?.label ?? id} ${value ? "on" : "off"}`;
-    return descriptor?.type === "select"
-      ? (descriptor.options.find((option) => option.id === value)?.label ?? value)
-      : value;
-  });
-  const attribution = [
-    provider ? resolveProviderInstanceDisplayName(provider) : instanceId,
-    ...(traits ?? []),
-  ].join(" · ");
+  const display = resolveRewriteModelDisplay(candidate.modelSelection, providers);
+  const openSideChat = () =>
+    useRightPanelStore.getState().openSideChat(parentRef, candidate.threadId);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- links in candidate output open in the parent chat's panel
   useEffect(() => hostRightPanel(ref, parentRef), [ref, parentRef]);
   return (
     <section
-      aria-label={`Rewrite by ${label}, ${attribution}`}
+      aria-label={`Rewrite by ${display.modelLabel}, ${display.subtitle}`}
+      data-selected={selected || undefined}
       className={cn(
-        "flex min-w-0 flex-col overflow-hidden rounded-xl border bg-card/60",
-        selected ? "border-primary/50" : "border-border/80",
+        "flex min-w-0 flex-col overflow-hidden rounded-xl border bg-card transition-[border-color,box-shadow] duration-150",
+        selected
+          ? "border-primary/45 ring-1 ring-primary/15 dark:border-primary/50 dark:ring-primary/20"
+          : "border-border/80 hover:border-border",
       )}
     >
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-muted/25 px-3 py-2">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-          <h3 className="break-words text-sm font-medium">{label}</h3>
-          <Badge
-            size="sm"
-            variant={needsInput ? "warning" : status === "failed" ? "error" : "secondary"}
-            role="status"
-          >
-            {!shell && hasSnapshot
-              ? "Unavailable"
-              : needsInput
-                ? "Needs input"
-                : status
-                  ? statusLabel[status]
-                  : "Loading…"}
-          </Badge>
-          <p className="w-full break-words text-xs text-muted-foreground">{attribution}</p>
+      <header className="flex items-center justify-between gap-2.5 border-b border-border/50 px-3.5 py-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
+          <RewriteProviderIcon display={display} className="size-4" />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <h3 className="truncate text-sm font-medium leading-tight text-foreground">
+                {display.modelLabel}
+              </h3>
+              {!shell && hasSnapshot ? (
+                <Badge size="sm" variant="secondary" role="status">
+                  Unavailable
+                </Badge>
+              ) : needsInput ? (
+                <Badge size="sm" variant="warning" role="status">
+                  Needs input
+                </Badge>
+              ) : status === "failed" ? (
+                <Badge size="sm" variant="error" role="status">
+                  Failed
+                </Badge>
+              ) : status === "cancelled" || status === "interrupted" || status === "rolled_back" ? (
+                <Badge size="sm" variant="secondary" role="status">
+                  {statusLabel[status]}
+                </Badge>
+              ) : !ready ? (
+                <span
+                  role="status"
+                  className="inline-flex shrink-0 items-center gap-1 text-2xs text-muted-foreground"
+                >
+                  <Spinner size="xs" />
+                  {status ? statusLabel[status] : "Loading…"}
+                </span>
+              ) : null}
+            </div>
+            <p className="truncate text-2xs leading-snug text-muted-foreground">
+              {display.subtitle}
+            </p>
+          </div>
         </div>
-        {shell && (
-          <Button
-            size="xs"
-            variant={ready && canAdopt && !selected ? "default" : "ghost-muted"}
-            disabled={selected || !ready || needsInput || !canAdopt}
-            onClick={() => onSelect(candidate.threadId)}
-          >
-            {selected ? (
-              <>
-                <CheckIcon /> In thread
-              </>
-            ) : (
-              "Use this rewrite"
-            )}
-          </Button>
-        )}
+        {shell ? (
+          selected ? (
+            <span
+              role="status"
+              className="inline-flex h-6 shrink-0 items-center gap-1 rounded-(--control-radius) bg-primary/10 px-2 text-xs font-medium text-primary dark:bg-primary/16 dark:text-info-foreground"
+            >
+              <CheckIcon className="size-3" />
+              In thread
+            </span>
+          ) : needsInput ? (
+            <Button size="xs" variant="warning-outline" onClick={openSideChat}>
+              Respond <ArrowUpRightIcon className="size-3" />
+            </Button>
+          ) : (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={!ready || !canAdopt}
+              onClick={() => onSelect(candidate.threadId)}
+            >
+              Use this rewrite
+            </Button>
+          )
+        ) : null}
       </header>
       {shell ? (
         <>
-          <div className="max-h-[45dvh] overflow-auto px-3.5 py-3 @2xl:max-h-[72dvh]">
-            <RewriteOutput threadRef={ref} runId={candidate.runId} showActivity />
-          </div>
-          <div className="border-t border-border/60 px-2 py-1">
-            <Button
-              size="xs"
-              variant="ghost-muted"
-              onClick={() =>
-                useRightPanelStore.getState().openSideChat(parentRef, candidate.threadId)
-              }
-            >
-              {needsInput ? "Open side chat to respond" : "Open side chat"} <ArrowUpRightIcon />
+          <ScrollArea scrollFade className="max-h-[48dvh] @2xl:max-h-[68dvh]">
+            <div className="px-3.5 py-3">
+              <RewriteOutput threadRef={ref} runId={candidate.runId} showActivity />
+            </div>
+          </ScrollArea>
+          <footer className="flex items-center justify-between gap-1 border-t border-border/40 px-2.5 py-1.5">
+            {copyText ? (
+              <MessageCopyButton
+                text={copyText}
+                label={`Copy ${display.modelLabel} rewrite`}
+                variant="ghost"
+              />
+            ) : (
+              <span />
+            )}
+            <Button size="xs" variant="ghost-muted" onClick={openSideChat}>
+              {needsInput ? "Open side chat to respond" : "Open side chat"}
+              <ArrowUpRightIcon className="size-3" />
             </Button>
-          </div>
+          </footer>
         </>
       ) : (
         <p className="px-3.5 py-3 text-sm text-muted-foreground">
@@ -173,7 +209,10 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
   const [showOriginal, setShowOriginal] = useState(false);
   const pending = request.status === "pending";
   const error = request.status === "failed" && (
-    <p role="alert" className="px-3 py-2 text-sm text-destructive-foreground">
+    <p
+      role="alert"
+      className="border-b border-border/60 px-3 py-2 text-xs text-destructive-foreground"
+    >
       {request.message}
     </p>
   );
@@ -216,7 +255,9 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
       <Empty size="compact">
         <PenLineIcon className="size-5 text-muted-foreground" />
         {!settings || pending ? (
-          <p role="status">{pending ? "Starting rewrite council…" : "Loading council…"}</p>
+          <p role="status" className="text-xs text-muted-foreground">
+            {pending ? "Starting rewrite council…" : "Loading council…"}
+          </p>
         ) : settings.rewriteCouncil.length === 0 ? (
           <>
             <EmptyHeader>
@@ -240,24 +281,38 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
             </Button>
           </>
         ) : (
-          <Button size="sm" disabled={!canOperate} onClick={() => void submit()}>
+          <Button size="sm" variant="outline" disabled={!canOperate} onClick={() => void submit()}>
             Generate rewrites
           </Button>
         )}
         {error}
       </Empty>
     );
+  const sourceDisplay = resolveRewriteModelDisplay(source.modelSelection, config.providers);
   return (
     <div data-rewrites-panel={runId} className="@container flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-2 py-1.5">
-        <h2 className="me-auto ps-1 text-xs font-medium">Turn {source.ordinal} rewrites</h2>
+      <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-1.5 border-b border-border/80 px-3 py-1">
+        <div className="me-auto flex min-w-0 items-center gap-1.5">
+          <h2 className="truncate text-xs font-medium text-foreground">
+            Turn {source.ordinal} rewrites
+          </h2>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            · {group.candidates.length}
+          </span>
+        </div>
         <Button
           size="xs"
           variant="ghost-muted"
           aria-expanded={showOriginal}
+          data-pressed={showOriginal ? "" : undefined}
           onClick={() => setShowOriginal(!showOriginal)}
         >
-          <ChevronDownIcon className={cn("size-3.5", !showOriginal && "-rotate-90")} />
+          <ChevronRightIcon
+            className={cn(
+              "size-3.5 transition-transform duration-150",
+              showOriginal && "rotate-90",
+            )}
+          />
           Original
         </Button>
         {group.selectedThreadId !== null ? (
@@ -270,34 +325,73 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
             Use original
           </Button>
         ) : (
-          <span className="flex items-center gap-1 pe-1 text-xs text-muted-foreground">
-            <CheckIcon className="size-3" /> In thread
+          <span className="inline-flex h-6 items-center gap-1 px-1.5 text-xs text-muted-foreground">
+            <CheckIcon className="size-3 text-primary" />
+            Original in thread
           </span>
         )}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                size="icon-xs"
+                variant="ghost-muted"
+                aria-label="Configure rewrite council"
+                render={
+                  <Link
+                    to="/settings/threads"
+                    search={{ machine: threadRef.environmentId }}
+                    hash="rewrite-council"
+                  />
+                }
+              />
+            }
+          >
+            <SlidersHorizontalIcon className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">Configure rewrite council</TooltipPopup>
+        </Tooltip>
       </div>
       {error}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {showOriginal && (
-          <div className="max-h-[45dvh] overflow-auto border-b border-border px-4 py-3">
-            <RewriteOutput threadRef={threadRef} runId={runId} />
+      {showOriginal && (
+        <div className="shrink-0 border-b border-border/70 bg-muted/25 dark:bg-white/[0.02]">
+          <div className="flex items-center justify-between gap-2 px-3.5 pt-2 pb-1">
+            <div className="flex min-w-0 items-center gap-1.5 text-xs">
+              <RewriteProviderIcon display={sourceDisplay} className="size-3.5" />
+              <span className="font-medium text-foreground">Original</span>
+              <span className="truncate text-muted-foreground">· {sourceDisplay.inlineLabel}</span>
+            </div>
+            <Button
+              size="icon-xs"
+              variant="ghost-muted"
+              aria-label="Hide original"
+              onClick={() => setShowOriginal(false)}
+            >
+              <XIcon className="size-3" />
+            </Button>
           </div>
-        )}
+          <ScrollArea scrollFade className="max-h-[36dvh]">
+            <div className="px-3.5 pt-1 pb-3">
+              <RewriteOutput threadRef={threadRef} runId={runId} />
+            </div>
+          </ScrollArea>
+        </div>
+      )}
+      <ScrollArea className="min-h-0 flex-1">
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,21rem),1fr))] items-start gap-3 p-3">
           {group.candidates.map((candidate) => (
             <RewriteCard
               key={candidate.threadId}
               parentRef={threadRef}
               candidate={candidate}
-              provider={config.providers.find(
-                (provider) => provider.instanceId === candidate.modelSelection.instanceId,
-              )}
+              providers={config.providers}
               selected={group.selectedThreadId === candidate.threadId}
               canAdopt={canOperate && !pending && !threadRuntimeIsActive(parent?.runtime)}
               onSelect={(id) => void submit(id)}
             />
           ))}
         </div>
-      </div>
+      </ScrollArea>
     </div>
   );
 }
