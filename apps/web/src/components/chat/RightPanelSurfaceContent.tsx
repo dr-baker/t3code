@@ -13,6 +13,7 @@ import type {
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { lazy, Suspense } from "react";
 import { LinkedThreadPane } from "./LinkedThreadPane";
+import { RewritesPanel } from "./RewritesPanel";
 import SideThreadPane from "./SideThreadPane";
 import type { ComposerImageAttachment, DraftId } from "../../composerDraftStore";
 import type { ShortcutMatchContext } from "../../keybindings";
@@ -215,6 +216,14 @@ export function RightPanelSurfaceContent(props: {
       );
     case "pull-requests":
       return <ThreadPullRequestsPanel threadRef={threadRef} />;
+    case "rewrites":
+      return (
+        <RewritesPanel
+          key={`${scopedThreadKey(threadRef)}:${surface.id}`}
+          threadRef={threadRef}
+          runId={surface.runId}
+        />
+      );
     case "thread":
       // Not lazy: revealing a suspended tiptap editor tears down its view and crashes the composer.
       return (

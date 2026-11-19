@@ -91,6 +91,8 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
         (surface.title === null || typeof surface.title === "string") &&
         decodeLinkedThreadSurface(surface)?.id === surface.id
       );
+    case "rewrites":
+      return typeof surface.runId === "string" && surface.id === `rewrites:${surface.runId}`;
     case "pull-request":
       return (
         typeof surface.projectId === "string" &&

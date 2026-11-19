@@ -386,12 +386,13 @@ answer its questions.
 
 Choose the models and reasoning effort in **Settings → Threads → Rewrite council**. Select
 **Rewrites** on a finished answer to have each member answer the original request independently.
-Switch between the original and the council members to read their answers and visualizations.
+On web and desktop, compare the candidates in the right panel beside the conversation. Widen
+or maximize the panel for more reading room. On mobile, tap a model to read its answer.
 
 **Use this rewrite** displays that answer in the thread and brings its context into your next
-message. Reopen **Rewrites** to switch answers or choose **Original → Use original**. Switching
-before sending a message updates which answer is brought back. Messages already sent keep their
-original context.
+message. Reopen **Rewrites** to switch answers. To restore the original, choose **Use original**
+(on mobile, tap **Original** first). Switching before sending a message updates which answer is
+brought back. Messages already sent keep their original context.
 
 ## Watch another thread
 

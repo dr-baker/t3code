@@ -50,6 +50,7 @@ import {
   Files,
   Globe2,
   MessagesSquare,
+  PenLine,
   Plus,
   TerminalSquare,
   Volume2Icon,
@@ -630,6 +631,8 @@ function surfaceTitle(
         surface,
         resolve(msg("Thread on {label}", { label: surface.label })),
       );
+    case "rewrites":
+      return "Rewrites";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return resolve(msg("Browser"));
@@ -720,6 +723,8 @@ function SurfaceIcon({
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
     case "issue":
       return <IssueSurfaceIcon surface={surface} environmentId={environmentId} />;
+    case "rewrites":
+      return <PenLine className="size-3 shrink-0" />;
     case "thread":
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
     case "linked-thread":

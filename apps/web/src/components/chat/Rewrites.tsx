@@ -1,5 +1,8 @@
-import { useAtomValue } from "@effect/atom-react";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { useAtom, useAtomValue } from "@effect/atom-react";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import {
   CommandId,
   type ModelSelection,
@@ -9,13 +12,15 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { rewriteModelLabel } from "@t3tools/shared/model";
+import { Atom } from "effect/reactivity";
+import { PenLineIcon } from "lucide-react";
+import { useState } from "react";
+
 import { useLongLivedAssetUrl } from "../../assets/longLivedAssetUrls";
+import { useRightPanelStore } from "../../rightPanelStore";
 import { isImageAttachment, type ChatAttachment } from "../../types";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useNavigate } from "@tanstack/react-router";
-import { AsyncResult } from "effect/reactivity";
-import { useState } from "react";
 import { randomUUID } from "../../lib/utils";
 import { deriveTimelineEntriesFromVisibleTurnItems } from "../../session-logic";
 import {
@@ -30,20 +35,15 @@ import { serverEnvironment } from "../../state/server";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
-import {
-  Dialog,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "../ui/dialog";
+import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
+import { WorkLogList, WorkLogRow } from "./WorkLog";
+import { workEntryDisplayLabel } from "./MessagesTimeline.logic";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
 import { MessageCopyButton } from "./MessageCopyButton";
 
-type AnswerRef = { threadRef: ScopedThreadRef; runId: RunId };
-type RewriteGroup = NonNullable<OrchestrationV2Run["rewrites"]>;
+export type AnswerRef = { threadRef: ScopedThreadRef; runId: RunId };
+export type RewriteGroup = NonNullable<OrchestrationV2Run["rewrites"]>;
 
 function RewriteAttachment({
   threadRef,
@@ -72,15 +72,15 @@ export function RewriteOutput({
   threadRef,
   runId,
   attribution,
-}: AnswerRef & { attribution?: ModelSelection }) {
+  showActivity = false,
+}: AnswerRef & { attribution?: ModelSelection; showActivity?: boolean }) {
   const projection = useQuietThreadProjection(threadRef)?.projection;
   const project = useProject(
     projection
       ? { environmentId: threadRef.environmentId, projectId: projection.thread.projectId }
       : null,
   );
-  const history = useThreadHistory(threadRef);
-  const loadEarlier = useAtomCommand(threadEnvironment.loadEarlierHistory);
+  const [activityOpen, setActivityOpen] = useState(false);
   const items = useThreadVisibleTurnItems(threadRef);
   const runItems = items.filter(
     ({ sourceThreadId, item }) => sourceThreadId === threadRef.threadId && item.runId === runId,
@@ -94,6 +94,7 @@ export function RewriteOutput({
     plans: projection?.plans ?? [],
   });
   const run = projection?.runs.find((item) => item.id === runId);
+  const activity = showActivity ? entries.filter((entry) => entry.kind === "work") : [];
   const text: string[] = [];
   const output = entries.flatMap((entry) => {
     if (entry.kind === "html-render")
@@ -118,18 +119,16 @@ export function RewriteOutput({
           onSendMessage={undefined}
         />,
       ];
+    const assistant =
+      entry.kind === "message" && entry.message.role === "assistant" ? entry.message : undefined;
     const body =
-      entry.kind === "message" && entry.message.role === "assistant"
-        ? entry.message.text
-        : entry.kind === "sent-message"
-          ? entry.text
-          : entry.kind === "proposed-plan"
-            ? entry.proposedPlan.planMarkdown
-            : "";
-    const attachments =
-      entry.kind === "message" && entry.message.role === "assistant"
-        ? entry.message.attachments
-        : undefined;
+      assistant?.text ??
+      (entry.kind === "sent-message"
+        ? entry.text
+        : entry.kind === "proposed-plan"
+          ? entry.proposedPlan.planMarkdown
+          : "");
+    const attachments = assistant?.attachments;
     if (!body && !attachments?.length) return [];
     if (body) text.push(body);
     return [
@@ -137,6 +136,7 @@ export function RewriteOutput({
         {body && (
           <ChatMarkdown
             text={body}
+            isStreaming={Boolean(assistant?.streaming)}
             renderInsights
             cwd={projection?.thread.worktreePath ?? project?.workspaceRoot}
             threadRef={threadRef}
@@ -156,30 +156,39 @@ export function RewriteOutput({
           Rewrite · {rewriteModelLabel(attribution)}
         </div>
       )}
-      {history.hasMoreHistory && !reachedRunStart && (
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={history.loading}
-          onClick={() =>
-            void loadEarlier({
-              environmentId: threadRef.environmentId,
-              input: { threadId: threadRef.threadId },
-            })
-          }
-        >
-          {history.loading ? "Loading earlier output…" : "Load earlier output"}
-        </Button>
+      {!reachedRunStart && <EarlierRewriteHistory threadRef={threadRef} />}
+      {activity.length > 0 && (
+        <div className="rounded-md bg-muted/30">
+          <CollapsibleSectionHeader
+            expanded={activityOpen}
+            onClick={() => setActivityOpen(!activityOpen)}
+          >
+            Activity ({activity.length})
+          </CollapsibleSectionHeader>
+          {activityOpen && (
+            <div className="max-h-48 overflow-y-auto px-2 pb-2">
+              <WorkLogList>
+                {activity.map(({ id, entry }) => (
+                  <WorkLogRow
+                    key={id}
+                    label={workEntryDisplayLabel(entry, project?.workspaceRoot)}
+                  />
+                ))}
+              </WorkLogList>
+            </div>
+          )}
+        </div>
       )}
-      {history.error && !reachedRunStart && <p role="status">{history.error}</p>}
       {output}
       {output.length === 0 && (
         <p role="status" className="text-sm text-muted-foreground">
           {run?.status === "failed"
             ? "This rewrite failed."
-            : run?.status === "interrupted"
+            : run?.status === "interrupted" ||
+                run?.status === "cancelled" ||
+                run?.status === "rolled_back"
               ? "This rewrite was interrupted."
-              : run?.status === "completed"
+              : run?.status === "completed" || run?.status === "waiting"
                 ? "This answer has no visible output."
                 : "Waiting for the answer…"}
         </p>
@@ -191,182 +200,101 @@ export function RewriteOutput({
   );
 }
 
+export function EarlierRewriteHistory({ threadRef }: Pick<AnswerRef, "threadRef">) {
+  const history = useThreadHistory(threadRef);
+  const loadEarlier = useAtomCommand(threadEnvironment.loadEarlierHistory);
+  return (
+    <>
+      {history.hasMoreHistory && (
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={history.loading}
+          onClick={() =>
+            void loadEarlier({
+              environmentId: threadRef.environmentId,
+              input: { threadId: threadRef.threadId },
+            })
+          }
+        >
+          {history.loading ? "Loading earlier output…" : "Load earlier output"}
+        </Button>
+      )}
+      {history.error && <p role="status">{history.error}</p>}
+    </>
+  );
+}
+
+type RewriteRequest = { status: "idle" | "pending" } | { status: "failed"; message: string };
+
+// The timeline button and panel share feedback for the same command, even if the row scrolls away.
+const requestAtom = Atom.family((_answer: AnswerRef) =>
+  Atom.make<RewriteRequest>({ status: "idle" }),
+);
+
+export function useRewriteCommand(answer: AnswerRef, hasCouncil: boolean) {
+  const { threadRef, runId } = answer;
+  const action = hasCouncil ? "thread.rewrites.select" : "thread.rewrites.start";
+  const permitted = useAtomValue(
+    orchestrationEnvironment.v2.dispatchCommand.permissionAtom(threadRef.environmentId, {
+      type: action,
+    }),
+  );
+  const parent = useQuietThreadShell(threadRef);
+  const canOperate = permitted && parent?.archivedAt === null;
+  const dispatch = useOrchestrationCommand(orchestrationEnvironment.v2.dispatchCommand, {
+    reportFailure: false,
+  });
+  const [request, setRequest] = useAtom(requestAtom(answer));
+  const submit = async (candidateThreadId?: ThreadId | null) => {
+    if (!canOperate || request.status === "pending") return;
+    setRequest({ status: "pending" });
+    const command = {
+      commandId: CommandId.make(randomUUID()),
+      threadId: threadRef.threadId,
+      runId,
+      createdBy: "user",
+      creationSource: "web",
+    } as const;
+    const result = await dispatch({
+      environmentId: threadRef.environmentId,
+      input:
+        candidateThreadId === undefined
+          ? { ...command, type: "thread.rewrites.start" }
+          : { ...command, type: "thread.rewrites.select", candidateThreadId },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const cause = squashAtomCommandFailure(result);
+      setRequest({
+        status: "failed",
+        message: cause instanceof Error ? cause.message : String(cause),
+      });
+    } else {
+      setRequest({ status: "idle" });
+    }
+  };
+  return { canOperate, request, submit };
+}
+
 export function RewriteButton({
   threadRef,
   runId,
   group,
 }: AnswerRef & { group?: RewriteGroup | undefined }) {
-  const [open, setOpen] = useState(false);
-  const parent = useQuietThreadShell(threadRef);
-  const canOperate =
-    useAtomValue(
-      orchestrationEnvironment.v2.dispatchCommand.permissionAtom(threadRef.environmentId, {
-        type: "thread.rewrites.start",
-      }),
-    ) && parent?.archivedAt == null;
+  const { canOperate, submit } = useRewriteCommand({ threadRef, runId }, !!group);
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(threadRef.environmentId));
-  const [tab, setTab] = useState<ThreadId | null | undefined>(undefined);
-  const candidateId =
-    tab === undefined ? (group?.selectedThreadId ?? group?.candidates[0]?.threadId) : tab;
-  const seat = group?.candidates.find((candidate) => candidate.threadId === candidateId);
-  const available = useQuietThreadShell(
-    open && seat ? { ...threadRef, threadId: seat.threadId } : null,
-  );
-  const candidate = available ? seat : undefined;
-  const ref = candidate ? { ...threadRef, threadId: candidate.threadId } : threadRef;
-  const viewed = useQuietThreadProjection(open && candidate ? ref : null)?.projection;
-  const viewedStatus = viewed?.runs.find((run) => run.id === candidate?.runId)?.status;
-  const dispatch = useOrchestrationCommand(orchestrationEnvironment.v2.dispatchCommand);
-  const navigate = useNavigate();
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  async function submit(selection?: ThreadId | null) {
-    setBusy(true);
-    setError("");
-    try {
-      const command = {
-        commandId: CommandId.make(randomUUID()),
-        threadId: threadRef.threadId,
-        runId,
-        createdBy: "user",
-        creationSource: "web",
-      } as const;
-      const result = await dispatch({
-        environmentId: threadRef.environmentId,
-        input:
-          selection === undefined
-            ? { ...command, type: "thread.rewrites.start" }
-            : { ...command, type: "thread.rewrites.select", candidateThreadId: selection },
-      });
-      if (AsyncResult.isFailure(result)) {
-        const cause = squashAtomCommandFailure(result);
-        setError(cause instanceof Error ? cause.message : String(cause));
-      } else if (selection !== undefined) {
-        setOpen(false);
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-    setBusy(false);
-  }
-  const needsCouncil = !group && settings !== null && !settings?.rewriteCouncil.length;
-  const start = () => {
-    setOpen(true);
-    setTab(undefined);
-    setError("");
-    if (!group && settings?.rewriteCouncil.length) void submit();
-  };
   return (
-    <>
-      <Button
-        size="xs"
-        variant="ghost-muted"
-        disabled={!group && (!canOperate || !settings)}
-        onClick={start}
-      >
-        Rewrites
-      </Button>
-      {open && (
-        <Dialog open onOpenChange={setOpen}>
-          <DialogPopup className="flex h-[85dvh] w-full max-w-4xl flex-col">
-            <DialogHeader>
-              <DialogTitle>Rewrites</DialogTitle>
-            </DialogHeader>
-            {group && (
-              <RewriteTabs group={group} active={candidate?.threadId ?? null} onPick={setTab} />
-            )}
-            <DialogPanel key={candidate?.threadId ?? "original"} className="min-h-0 flex-1">
-              {needsCouncil ? (
-                <p>Choose the models and reasoning effort for your rewrite council in Settings.</p>
-              ) : (
-                <RewriteOutput threadRef={ref} runId={candidate?.runId ?? runId} />
-              )}
-            </DialogPanel>
-            <DialogFooter>
-              {candidate && viewed?.runtimeRequests.some((r) => r.status === "pending") && (
-                <Button
-                  variant="outline"
-                  onClick={() => void navigate({ to: "/$environmentId/$threadId", params: ref })}
-                >
-                  Open side chat to respond
-                </Button>
-              )}
-              {error && (
-                <p role="alert" className="text-sm text-destructive">
-                  {error}
-                </p>
-              )}
-              {needsCouncil ? (
-                <Button
-                  onClick={() =>
-                    void navigate({
-                      to: "/settings/threads",
-                      search: { machine: threadRef.environmentId },
-                      hash: "rewrite-council",
-                    })
-                  }
-                >
-                  Set up council
-                </Button>
-              ) : !group ? (
-                <Button disabled={busy || !settings || !canOperate} onClick={() => void submit()}>
-                  {busy ? "Starting…" : "Generate rewrites"}
-                </Button>
-              ) : (
-                <Button
-                  disabled={
-                    busy ||
-                    !canOperate ||
-                    (candidate
-                      ? viewedStatus !== "completed" && viewedStatus !== "waiting"
-                      : !group.selectedThreadId)
-                  }
-                  onClick={() => void submit(candidate?.threadId ?? null)}
-                >
-                  {candidate ? "Use this rewrite" : "Use original"}
-                </Button>
-              )}
-            </DialogFooter>
-          </DialogPopup>
-        </Dialog>
-      )}
-    </>
-  );
-}
-
-function RewriteTabs({
-  group,
-  active,
-  onPick,
-}: {
-  group: RewriteGroup;
-  active: ThreadId | null;
-  onPick: (id: ThreadId | null) => void;
-}) {
-  return (
-    <nav
-      aria-label="Answers"
-      className="flex shrink-0 gap-1 overflow-x-auto px-5 pb-2 [&>button]:shrink-0"
+    <Button
+      size="xs"
+      variant="ghost-muted"
+      disabled={!group && (!canOperate || !settings)}
+      onClick={() => {
+        useRightPanelStore.getState().openRewrites(threadRef, runId);
+        if (!group && settings?.rewriteCouncil.length) void submit();
+      }}
     >
-      <Button
-        size="sm"
-        variant={active === null ? "secondary" : "ghost"}
-        aria-pressed={active === null}
-        onClick={() => onPick(null)}
-      >
-        Original
-      </Button>
-      {group.candidates.map((seat) => (
-        <Button
-          key={seat.threadId}
-          size="sm"
-          variant={active === seat.threadId ? "secondary" : "ghost"}
-          aria-pressed={active === seat.threadId}
-          onClick={() => onPick(seat.threadId)}
-        >
-          {rewriteModelLabel(seat.modelSelection)}
-        </Button>
-      ))}
-    </nav>
+      <PenLineIcon />
+      Rewrites
+    </Button>
   );
 }
