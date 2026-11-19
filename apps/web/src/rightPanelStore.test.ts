@@ -58,6 +58,38 @@ describe("rightPanelStore", () => {
     );
   });
 
+  it("reopens the exact rewrite comparison across turns, other tabs and reloads", async () => {
+    const panels = useRightPanelStore.getState();
+    const first = RunId.make("first");
+    const second = RunId.make("second");
+    panels.openRewrites(refA, first);
+    panels.open(refA, "diff");
+    panels.openRewrites(refA, second);
+    panels.openRewrites(refA, first);
+    panels.setMaximized(refA, true);
+    await reloadRightPanelStore();
+    const panel = () =>
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(panel().surfaces.map((s) => s.id)).toEqual([
+      "rewrites:first",
+      "diff",
+      "rewrites:second",
+    ]);
+    expect(panel()).toMatchObject({ activeSurfaceId: "rewrites:first", maximized: true });
+    panels.closeSurface(refA, "rewrites:first");
+    await reopenClosedView(useClosedViewStore.getState().entries[0]!, {
+      workspaceAvailable: false,
+      openPreview: () => {
+        throw new Error("Rewrites do not open a browser session");
+      },
+    });
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "rewrites:first",
+      kind: "rewrites",
+      runId: first,
+    });
+  });
+
   it("records single and bulk tab closes, newest first", () => {
     const store = useRightPanelStore.getState();
     const pr = pullRequestSurface({

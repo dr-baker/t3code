@@ -32,6 +32,7 @@ const RIGHT_PANEL_KINDS = [
   "issue",
   "thread",
   "linked-thread",
+  "rewrites",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -109,7 +110,8 @@ export type RightPanelSurface =
    */
   | ThreadSurface
   /** A linked environment's thread, read through `viaEnvironmentId`; it has no thread here. */
-  | LinkedThreadSurface;
+  | LinkedThreadSurface
+  | { id: `rewrites:${RunId}`; kind: "rewrites"; runId: RunId };
 
 export type ThreadSurface = { id: `thread:${string}`; kind: "thread"; threadId: ThreadId };
 
@@ -187,9 +189,10 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     kind: Exclude<
       RightPanelKind,
-      "file" | "terminal" | "pull-request" | "issue" | "thread" | "linked-thread"
+      "file" | "terminal" | "pull-request" | "issue" | "thread" | "linked-thread" | "rewrites"
     >,
   ) => void;
+  openRewrites: (ref: ScopedThreadRef, runId: RunId) => void;
   /** Opens a side chat or subagent of `ref`'s environment as a tab; `ref` itself has no tab. */
   openThread: (ref: ScopedThreadRef, threadId: ThreadId) => void;
   openLinkedThread: (ref: ScopedThreadRef, target: LinkedThreadTarget) => void;
@@ -261,7 +264,7 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     kind: Exclude<
       RightPanelKind,
-      "file" | "terminal" | "pull-request" | "issue" | "thread" | "linked-thread"
+      "file" | "terminal" | "pull-request" | "issue" | "thread" | "linked-thread" | "rewrites"
     >,
   ) => void;
   setThreadPanelOpen: (
@@ -287,7 +290,7 @@ const DEFAULT_THREAD_PANEL_VISIBILITY: ThreadPanelVisibility = {
 const singletonSurface = (
   kind: Exclude<
     RightPanelKind,
-    "file" | "preview" | "terminal" | "pull-request" | "issue" | "thread" | "linked-thread"
+    "file" | "preview" | "terminal" | "pull-request" | "issue" | "thread" | "linked-thread" | "rewrites"
   >,
 ): RightPanelSurface => {
   switch (kind) {
@@ -871,6 +874,12 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               existing ?? surface,
             );
           }),
+        ),
+      openRewrites: (ref, runId) =>
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) =>
+            upsertSurface(current, { id: `rewrites:${runId}`, kind: "rewrites", runId }),
+          ),
         ),
       openThread: (ref, threadId) =>
         set((state) =>
