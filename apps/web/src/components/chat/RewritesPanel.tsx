@@ -201,6 +201,16 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
         <EarlierRewriteHistory threadRef={threadRef} />
       </Empty>
     );
+  if (source.status !== "completed" && source.status !== "waiting")
+    return (
+      <Empty>
+        <EmptyDescription>
+          {source.status === "rolled_back"
+            ? "This turn was rolled back."
+            : "Rewrites are unavailable for this turn."}
+        </EmptyDescription>
+      </Empty>
+    );
   if (!group)
     return (
       <Empty size="compact">

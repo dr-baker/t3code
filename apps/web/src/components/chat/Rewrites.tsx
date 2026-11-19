@@ -119,18 +119,16 @@ export function RewriteOutput({
           onSendMessage={undefined}
         />,
       ];
+    const assistant =
+      entry.kind === "message" && entry.message.role === "assistant" ? entry.message : undefined;
     const body =
-      entry.kind === "message" && entry.message.role === "assistant"
-        ? entry.message.text
-        : entry.kind === "sent-message"
-          ? entry.text
-          : entry.kind === "proposed-plan"
-            ? entry.proposedPlan.planMarkdown
-            : "";
-    const attachments =
-      entry.kind === "message" && entry.message.role === "assistant"
-        ? entry.message.attachments
-        : undefined;
+      assistant?.text ??
+      (entry.kind === "sent-message"
+        ? entry.text
+        : entry.kind === "proposed-plan"
+          ? entry.proposedPlan.planMarkdown
+          : "");
+    const attachments = assistant?.attachments;
     if (!body && !attachments?.length) return [];
     if (body) text.push(body);
     return [
@@ -138,6 +136,7 @@ export function RewriteOutput({
         {body && (
           <ChatMarkdown
             text={body}
+            isStreaming={Boolean(assistant?.streaming)}
             renderInsights
             cwd={projection?.thread.worktreePath ?? project?.workspaceRoot}
             threadRef={threadRef}

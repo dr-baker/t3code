@@ -260,19 +260,26 @@ describe("thread relationships", () => {
     const fallbackParent = ThreadId.make("thread-parent");
     const fork = ThreadId.make("thread-fork");
 
-    expect(
-      resolveMergeBackTargetThreadId({
-        thread: {
-          id: fork,
-          forkedFrom: { type: "run", threadId: source, runId: "run-source" },
-          lineage: {
-            rootThreadId: source,
-            parentThreadId: fallbackParent,
-            relationshipToParent: "fork",
+    for (const [lineage, target] of [
+      [{}, source],
+      [{ sideChat: true }, source],
+      [{ sideChat: true, rewrite: true }, null],
+    ] as const) {
+      expect(
+        resolveMergeBackTargetThreadId({
+          thread: {
+            id: fork,
+            forkedFrom: { type: "run", threadId: source, runId: "run-source" },
+            lineage: {
+              rootThreadId: source,
+              parentThreadId: fallbackParent,
+              relationshipToParent: "fork",
+              ...lineage,
+            },
           },
-        },
-      } as never),
-    ).toBe(source);
+        } as never),
+      ).toBe(target);
+    }
     expect(
       resolveMergeBackTargetThreadId({
         thread: {
