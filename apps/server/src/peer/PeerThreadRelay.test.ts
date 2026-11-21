@@ -1,4 +1,5 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as RunUpdateErrors from "../orchestration-v2/RunUpdateErrors.ts";
 import {
   EnvironmentId,
   EventId,
@@ -80,7 +81,11 @@ const serveBox = Effect.gen(function* () {
   });
   const peer = yield* servePeer(box, Layer.empty, LinkThreadHttp.layer).pipe(
     Effect.provide(
-      Layer.merge(threads, Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({})),
+      Layer.mergeAll(
+        threads,
+        Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({}),
+        RunUpdateErrors.layer,
+      ),
     ),
   );
   return { ...peer, live, closed };

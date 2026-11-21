@@ -8,6 +8,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
+import { T, useGT, Var } from "gt-react";
 import {
   ArrowUpRightIcon,
   CheckIcon,
@@ -73,6 +74,7 @@ function RewriteCard({
   canAdopt: boolean;
   onSelect: (threadId: ThreadId) => void;
 }) {
+  const gt = useGT();
   const ref = scopeThreadRef(parentRef.environmentId, candidate.threadId);
   const shell = useQuietThreadShell(ref);
   const hasSnapshot = useEnvironmentShellHasSnapshot(parentRef.environmentId);
@@ -87,12 +89,15 @@ function RewriteCard({
   );
   const display = resolveRewriteModelDisplay(candidate.modelSelection, providers);
   const openSideChat = () =>
-    useRightPanelStore.getState().openSideChat(parentRef, candidate.threadId);
+    useRightPanelStore.getState().openThread(parentRef, candidate.threadId);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- links in candidate output open in the parent chat's panel
   useEffect(() => hostRightPanel(ref, parentRef), [ref, parentRef]);
   return (
     <section
-      aria-label={`Rewrite by ${display.modelLabel}, ${display.subtitle}`}
+      aria-label={gt("Rewrite by {model}, {subtitle}", {
+        model: display.modelLabel,
+        subtitle: display.subtitle,
+      })}
       data-selected={selected || undefined}
       className={cn(
         "flex min-w-0 flex-col overflow-hidden rounded-xl border bg-card transition-[border-color,box-shadow] duration-150",
@@ -111,15 +116,15 @@ function RewriteCard({
               </h3>
               {!shell && hasSnapshot ? (
                 <Badge size="sm" variant="secondary" role="status">
-                  Unavailable
+                  <T>Unavailable</T>
                 </Badge>
               ) : needsInput ? (
                 <Badge size="sm" variant="warning" role="status">
-                  Needs input
+                  <T>Needs input</T>
                 </Badge>
               ) : status === "failed" ? (
                 <Badge size="sm" variant="error" role="status">
-                  Failed
+                  <T>Failed</T>
                 </Badge>
               ) : status === "cancelled" || status === "interrupted" || status === "rolled_back" ? (
                 <Badge size="sm" variant="secondary" role="status">
@@ -131,7 +136,7 @@ function RewriteCard({
                   className="inline-flex shrink-0 items-center gap-1 text-2xs text-muted-foreground"
                 >
                   <Spinner size="xs" />
-                  {status ? statusLabel[status] : "Loading…"}
+                  {status ? statusLabel[status] : gt("Loading…")}
                 </span>
               ) : null}
             </div>
@@ -147,11 +152,11 @@ function RewriteCard({
               className="inline-flex h-6 shrink-0 items-center gap-1 rounded-(--control-radius) bg-primary/10 px-2 text-xs font-medium text-primary dark:bg-primary/16 dark:text-info-foreground"
             >
               <CheckIcon className="size-3" />
-              In thread
+              <T>In thread</T>
             </span>
           ) : needsInput ? (
             <Button size="xs" variant="warning-outline" onClick={openSideChat}>
-              Respond <ArrowUpRightIcon className="size-3" />
+              <T>Respond</T> <ArrowUpRightIcon className="size-3" />
             </Button>
           ) : (
             <Button
@@ -160,7 +165,7 @@ function RewriteCard({
               disabled={!ready || !canAdopt}
               onClick={() => onSelect(candidate.threadId)}
             >
-              Use this rewrite
+              <T>Use this rewrite</T>
             </Button>
           )
         ) : null}
@@ -176,21 +181,21 @@ function RewriteCard({
             {copyText ? (
               <MessageCopyButton
                 text={copyText}
-                label={`Copy ${display.modelLabel} rewrite`}
+                label={gt("Copy {model} rewrite", { model: display.modelLabel })}
                 variant="ghost"
               />
             ) : (
               <span />
             )}
             <Button size="xs" variant="ghost-muted" onClick={openSideChat}>
-              {needsInput ? "Open side chat to respond" : "Open side chat"}
+              {needsInput ? gt("Open side chat to respond") : gt("Open side chat")}
               <ArrowUpRightIcon className="size-3" />
             </Button>
           </footer>
         </>
       ) : (
         <p className="px-3.5 py-3 text-sm text-muted-foreground">
-          {hasSnapshot ? "This side chat is no longer available." : "Loading side chat…"}
+          {hasSnapshot ? gt("This side chat is no longer available.") : gt("Loading side chat…")}
         </p>
       )}
     </section>
@@ -198,6 +203,7 @@ function RewriteCard({
 }
 
 export function RewritesPanel({ threadRef, runId }: AnswerRef) {
+  const gt = useGT();
   const config = useAtomValue(serverEnvironment.configValueAtom(threadRef.environmentId));
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(threadRef.environmentId));
   const parent = useQuietThreadShell(threadRef);
@@ -225,7 +231,9 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
   if (!config.environment.capabilities.rewrites) {
     return (
       <Empty>
-        <EmptyDescription>This environment does not support rewrites.</EmptyDescription>
+        <EmptyDescription>
+          <T>This environment does not support rewrites.</T>
+        </EmptyDescription>
       </Empty>
     );
   }
@@ -234,8 +242,8 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
       <Empty>
         <EmptyDescription>
           {history.hasMoreHistory
-            ? "This turn is in earlier history."
-            : "This turn is no longer available."}
+            ? gt("This turn is in earlier history.")
+            : gt("This turn is no longer available.")}
         </EmptyDescription>
         <EarlierRewriteHistory threadRef={threadRef} />
       </Empty>
@@ -245,8 +253,8 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
       <Empty>
         <EmptyDescription>
           {source.status === "rolled_back"
-            ? "This turn was rolled back."
-            : "Rewrites are unavailable for this turn."}
+            ? gt("This turn was rolled back.")
+            : gt("Rewrites are unavailable for this turn.")}
         </EmptyDescription>
       </Empty>
     );
@@ -256,14 +264,16 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
         <PenLineIcon className="size-5 text-muted-foreground" />
         {!settings || pending ? (
           <p role="status" className="text-xs text-muted-foreground">
-            {pending ? "Starting rewrite council…" : "Loading council…"}
+            {pending ? gt("Starting rewrite council…") : gt("Loading council…")}
           </p>
         ) : settings.rewriteCouncil.length === 0 ? (
           <>
             <EmptyHeader>
-              <EmptyTitle>Set up your rewrite council</EmptyTitle>
+              <EmptyTitle>
+                <T>Set up your rewrite council</T>
+              </EmptyTitle>
               <EmptyDescription>
-                Choose the models and reasoning effort that will rewrite this answer.
+                <T>Choose the models and reasoning effort that will rewrite this answer.</T>
               </EmptyDescription>
             </EmptyHeader>
             <Button
@@ -277,12 +287,12 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
                 />
               }
             >
-              Set up council
+              <T>Set up council</T>
             </Button>
           </>
         ) : (
           <Button size="sm" variant="outline" disabled={!canOperate} onClick={() => void submit()}>
-            Generate rewrites
+            <T>Generate rewrites</T>
           </Button>
         )}
         {error}
@@ -294,7 +304,9 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
       <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-1.5 border-b border-border/80 px-3 py-1">
         <div className="me-auto flex min-w-0 items-center gap-1.5">
           <h2 className="truncate text-xs font-medium text-foreground">
-            Turn {source.ordinal} rewrites
+            <T>
+              Turn <Var>{source.ordinal}</Var> rewrites
+            </T>
           </h2>
           <span className="text-xs text-muted-foreground tabular-nums">
             · {group.candidates.length}
@@ -313,7 +325,7 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
               showOriginal && "rotate-90",
             )}
           />
-          Original
+          <T>Original</T>
         </Button>
         {group.selectedThreadId !== null ? (
           <Button
@@ -322,12 +334,12 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
             disabled={!canOperate || pending}
             onClick={() => void submit(null)}
           >
-            Use original
+            <T>Use original</T>
           </Button>
         ) : (
           <span className="inline-flex h-6 items-center gap-1 px-1.5 text-xs text-muted-foreground">
             <CheckIcon className="size-3 text-primary" />
-            Original in thread
+            <T>Original in thread</T>
           </span>
         )}
         <Tooltip>
@@ -336,7 +348,7 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
               <Button
                 size="icon-xs"
                 variant="ghost-muted"
-                aria-label="Configure rewrite council"
+                aria-label={gt("Configure rewrite council")}
                 render={
                   <Link
                     to="/settings/threads"
@@ -349,7 +361,9 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
           >
             <SlidersHorizontalIcon className="size-3.5" />
           </TooltipTrigger>
-          <TooltipPopup side="bottom">Configure rewrite council</TooltipPopup>
+          <TooltipPopup side="bottom">
+            <T>Configure rewrite council</T>
+          </TooltipPopup>
         </Tooltip>
       </div>
       {error}
@@ -358,13 +372,15 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
           <div className="flex items-center justify-between gap-2 px-3.5 pt-2 pb-1">
             <div className="flex min-w-0 items-center gap-1.5 text-xs">
               <RewriteProviderIcon display={sourceDisplay} className="size-3.5" />
-              <span className="font-medium text-foreground">Original</span>
+              <span className="font-medium text-foreground">
+                <T>Original</T>
+              </span>
               <span className="truncate text-muted-foreground">· {sourceDisplay.inlineLabel}</span>
             </div>
             <Button
               size="icon-xs"
               variant="ghost-muted"
-              aria-label="Hide original"
+              aria-label={gt("Hide original")}
               onClick={() => setShowOriginal(false)}
             >
               <XIcon className="size-3" />

@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Snooze presets use local calendar boundaries and Intl labels.
 import * as DateTime from "effect/DateTime";
-import { DEFAULT_SNOOZE_PRESETS, type SnoozePresetSetting } from "@t3tools/contracts/settings";
+import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 
 const WEEKDAY_INDEX = {
   sunday: 0,
@@ -12,16 +12,11 @@ const WEEKDAY_INDEX = {
   saturday: 6,
 } as const;
 
-export interface SnoozePreset {
+interface SnoozePreset {
   readonly id: string;
   readonly label: string;
   readonly whenLabel: string;
   readonly snoozedUntil: string;
-}
-
-export interface SnoozePresetOptions {
-  readonly presets?: ReadonlyArray<SnoozePresetSetting>;
-  readonly formatTime?: (date: Date) => string;
 }
 
 function snoozeTimeOfDayLabel(date: Date): string {
@@ -73,13 +68,13 @@ function snoozePresetLabel(setting: SnoozePresetSetting, daysAhead: number): str
   return daysAhead === 7 ? `Next ${capitalize(setting.day)}` : capitalize(setting.day);
 }
 
-export function snoozePresetId(setting: SnoozePresetSetting): string {
+function snoozePresetId(setting: SnoozePresetSetting): string {
   return setting.kind === "after"
     ? `after:${setting.minutes}`
     : `at:${setting.day}:${setting.time}`;
 }
 
-export function resolveSnoozePreset(
+function resolveSnoozePreset(
   setting: SnoozePresetSetting,
   now: Date,
   formatTime: (date: Date) => string = snoozeTimeOfDayLabel,
@@ -108,48 +103,6 @@ export function resolveSnoozePreset(
         : `${wake.toLocaleDateString(undefined, { weekday: "short" })} ${time}`,
     snoozedUntil: wake.toISOString(),
   };
-}
-
-/** The snooze menu: soonest first, one row per wake minute. */
-export function resolveSnoozePresets(
-  now: Date,
-  options: SnoozePresetOptions = {},
-): ReadonlyArray<SnoozePreset> {
-  // By minute, so a duration (which keeps the clock's seconds) and a set time in the same
-  // minute tie, and the stable sort keeps whichever comes first in settings.
-  const wakeMinute = (preset: SnoozePreset) => Math.floor(Date.parse(preset.snoozedUntil) / 60_000);
-  const seen = new Set<number>();
-  return (
-    (options.presets ?? DEFAULT_SNOOZE_PRESETS)
-      .flatMap((setting) => resolveSnoozePreset(setting, now, options.formatTime) ?? [])
-      // flatMap returned a new array; Hermes has no `toSorted`.
-      .sort((a, b) => wakeMinute(a) - wakeMinute(b))
-      .filter((preset) => {
-        if (seen.has(wakeMinute(preset))) return false;
-        seen.add(wakeMinute(preset));
-        return true;
-      })
-  );
-}
-
-/**
- * A menu choice as picked. A duration re-resolves from its setting (not the deduped menu) so it
- * starts at selection. A set time keeps the shown wake, which a day change would otherwise shift.
- */
-export function pickSnoozePreset(input: {
-  readonly shown: ReadonlyArray<SnoozePreset>;
-  readonly id: string;
-  readonly now: Date;
-  readonly presets?: ReadonlyArray<SnoozePresetSetting>;
-  readonly formatTime?: (date: Date) => string;
-}): SnoozePreset | undefined {
-  const original = input.shown.find((preset) => preset.id === input.id);
-  const ahead =
-    original && Date.parse(original.snoozedUntil) > input.now.getTime() ? original : undefined;
-  const setting = (input.presets ?? DEFAULT_SNOOZE_PRESETS).find(
-    (candidate) => candidate.kind === "after" && snoozePresetId(candidate) === input.id,
-  );
-  return (setting && resolveSnoozePreset(setting, input.now, input.formatTime)) ?? ahead;
 }
 
 export function resolveAutoSnoozeUntil(

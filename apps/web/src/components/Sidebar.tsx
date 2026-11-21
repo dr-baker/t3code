@@ -223,7 +223,6 @@ import {
   useThreadJumpHintsVisible,
   type SidebarListItem,
   type SidebarSection,
-  resolveSidebarRowThreadId,
   resolveThreadLastVisitedAt,
 } from "./Sidebar.logic";
 import { createSidebarCollisionDetection, createSidebarSortingStrategy } from "./Sidebar.drag";
@@ -1846,9 +1845,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     void settlePromise(() =>
       api.contextMenu.show(
         [
-          { id: "expand", label: "Expand" },
-          { id: "icons", label: "Show icons" },
-          { id: "hide", label: "Fully collapse" },
+          { id: "expand", label: gt("Expand") },
+          { id: "icons", label: gt("Show icons") },
+          { id: "hide", label: gt("Fully collapse") },
         ],
         { x: event.clientX, y: event.clientY },
       ),
@@ -3843,6 +3842,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                         handleThreadContextMenu(
                                           scopeThreadRef(thread.environmentId, thread.id),
                                           { x: event.clientX, y: event.clientY },
+                                          event.button === 2 ||
+                                            event.clientX !== 0 ||
+                                            event.clientY !== 0
+                                            ? "mouse"
+                                            : "keyboard",
                                         );
                                     }}
                                   />

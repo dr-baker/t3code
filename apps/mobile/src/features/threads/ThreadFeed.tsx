@@ -2201,7 +2201,7 @@ function renderFeedEntry(
         renderText={(text) => (
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <AssistantMarkdownContent
-              markdown={renderAssistantCitationsAsText(text)}
+              markdown={text}
               environmentId={props.environmentId}
               markdownStyles={markdownStyles.assistant}
               linkHandlers={props.markdownLinkHandlers}
@@ -3960,10 +3960,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     setInteractionState((current) => ({ ...current, revealedMessageId: jumpToMessageId }));
   }
   const [appendPendingTurn] = useState(createPendingTurnAppender);
-  const feed = appendPendingTurn(
-    useThreadFeedPresentation(props, expandedTurnIds, expandedWorkGroups, revealedMessageId),
-    { zen: props.toolCallVisibility === "zen" },
-    m,
+  const feed = useThreadFeedPresentation(
+    props,
+    expandedTurnIds,
+    expandedWorkGroups,
+    revealedMessageId,
   );
   const rewritesEnabled =
     useAtomValue(serverEnvironment.configValueAtom(props.environmentId))?.environment.capabilities
@@ -3991,7 +3992,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       return feed;
     return placeThreadFeedRewriteControls(feed, rewriteParent.runs, availableRewriteCandidates);
   }, [availableRewriteCandidates, feed, rewriteParent]);
-  const presentedFeed = appendGuestPendingMessages(rewriteFeed, guestShare, m);
+  const presentedFeed = appendGuestPendingMessages(
+    appendPendingTurn(rewriteFeed, { zen: props.toolCallVisibility === "zen" }, m),
+    guestShare,
+    m,
+  );
   const pendingFoldMessageId =
     presentedFeed.findLast((entry) => entry.type === "pending-fold")?.messageId ?? null;
   const jumpRunId =

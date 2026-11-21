@@ -4,6 +4,7 @@ import {
   pickModelSelection,
   rewriteCouncilSeats,
 } from "@t3tools/shared/model";
+import { T, useGT } from "gt-react";
 import { PlusIcon, XIcon } from "lucide-react";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
@@ -14,7 +15,7 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { Button } from "../ui/button";
 import { SETTINGS_PICKER_TRIGGER_CLASSNAME, SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import {
   useScopedSettings,
   useScopedSettingsMixed,
@@ -31,6 +32,8 @@ export function RewriteCouncilSettings({
   environmentId: EnvironmentId | null;
   providers: ReadonlyArray<ServerProvider>;
 }) {
+  const gt = useGT();
+  const setting = useSearchableSetting();
   const settings = useScopedSettings();
   const { connectedEnvironments } = useSettingsScope();
   const mixed = useScopedSettingsMixed(["rewriteCouncil"]);
@@ -49,7 +52,7 @@ export function RewriteCouncilSettings({
   const replace = (index: number, selection: ModelSelection) =>
     save(council.map((seat, i) => (i === index ? selection : seat)));
   return (
-    <SettingsSection title="Rewrites">
+    <SettingsSection title={gt("Rewrites")}>
       <SettingsRow
         serverScoped
         settingKeys={["rewriteCouncil"]}
@@ -57,12 +60,16 @@ export function RewriteCouncilSettings({
         status={
           multipleEnvironments
             ? mixed
-              ? "Council settings differ across environments. Select an environment to edit its council."
-              : "Select an environment to configure its council."
+              ? gt(
+                  "Council settings differ across environments. Select an environment to edit its council.",
+                )
+              : gt("Select an environment to configure its council.")
             : undefined
         }
-        {...searchableSetting("rewrite-council")}
-        description="Each member writes an independent answer when you choose Rewrites on a finished turn."
+        {...setting("rewrite-council")}
+        description={gt(
+          "Each member writes an independent answer when you choose Rewrites on a finished turn.",
+        )}
         control={
           <div className="flex flex-col items-start gap-2">
             <Button
@@ -72,7 +79,7 @@ export function RewriteCouncilSettings({
               onClick={() => !disabled && defaultSelection && save([...council, defaultSelection])}
             >
               <PlusIcon />
-              Add model
+              <T>Add model</T>
             </Button>
             {!multipleEnvironments &&
               rewriteCouncilSeats(council).map(({ selection: seat, key }, index) => {
@@ -116,7 +123,7 @@ export function RewriteCouncilSettings({
                       variant="ghost-muted"
                       size="icon-xs"
                       disabled={disabled}
-                      aria-label={`Remove ${seat.model} from council`}
+                      aria-label={gt("Remove {model} from council", { model: seat.model })}
                       onClick={() => save(council.filter((_, i) => i !== index))}
                     >
                       <XIcon />

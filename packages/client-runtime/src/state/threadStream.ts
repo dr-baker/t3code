@@ -100,7 +100,7 @@ export function applyThreadHistoryPage(
   return {
     ...state,
     projection: mergeOlderSubagentsIntoProjection(
-      mergeOlderHistoryIntoProjection(state.projection, page.items),
+      mergeOlderHistoryIntoProjection(state.projection, page.items, undefined, page.runs),
       page.subagents,
     ),
     historyCursor: page.hasMoreHistory ? page.nextCursor : null,

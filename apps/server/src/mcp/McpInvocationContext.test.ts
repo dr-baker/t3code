@@ -9,7 +9,7 @@ import {
 import * as Effect from "effect/Effect";
 
 import * as McpInvocationContext from "./McpInvocationContext.ts";
-import { relabelThreadLinks } from "@t3tools/shared/threadLinks";
+import { replaceThreadLinks } from "@t3tools/shared/threadLinks";
 
 it("keeps local thread links clickable on mobile before their summaries load", () => {
   const environmentId = EnvironmentId.make("local");
@@ -17,7 +17,7 @@ it("keeps local thread links clickable on mobile before their summaries load", (
   const scope = { environmentId, client: undefined };
   const link = McpInvocationContext.threadLinkFor(scope, threadId, "Settled work");
   expect(link).toBe("[Settled work](t3-thread://v1/older-settled)");
-  expect(relabelThreadLinks(link, environmentId, () => undefined)).toBe(link);
+  expect(replaceThreadLinks(link, () => undefined)).toBe(link);
   expect(
     McpInvocationContext.threadLinkFor(
       {

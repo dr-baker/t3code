@@ -541,28 +541,28 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? [gt("Working section")]
       : []),
     ...(settings.sidebarPinnedMaxRows !== DEFAULT_UNIFIED_SETTINGS.sidebarPinnedMaxRows
-      ? ["Pinned icon rows"]
+      ? [gt("Pinned icon rows")]
       : []),
     ...(settings.sidebarPinnedPlacement !== DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPlacement
-      ? ["Pinned threads position"]
+      ? [gt("Pinned threads position")]
       : []),
     ...(settings.sidebarPinnedPopOutWhenReady !==
     DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPopOutWhenReady
-      ? ["Pop out ready pins"]
+      ? [gt("Pop out ready pins")]
       : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
-      ? ["Automatic behavior after inactivity"]
+      ? [gt("Automatic behavior after inactivity")]
       : []),
     ...(settings.sidebarAutoSettleKeepPullRequests !==
     DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests
       ? [gt("Keep threads with a PR")]
       : []),
     ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
-      ? ["Automatic behavior on merge"]
+      ? [gt("Automatic behavior on merge")]
       : []),
     ...(settings.computerUseAutoApproveAppAccess !==
     DEFAULT_UNIFIED_SETTINGS.computerUseAutoApproveAppAccess
-      ? ["Computer Use app access"]
+      ? [gt("Computer Use app access")]
       : []),
     ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
       ? [gt("Resume after usage limits")]
@@ -850,7 +850,7 @@ function AutoSettleDaysInput({
           setField(cancelAutoSettleDaysField(field));
         }
       }}
-      aria-label="Days of inactivity"
+      aria-label={gt("Days of inactivity")}
     />
   );
 }
@@ -967,12 +967,14 @@ export function GeneralSettingsPanel() {
           }
         />
         <SettingsRow
-          {...searchableSetting("compact-sidebar-cards")}
-          description="Show provider logos beside the project and hide the metadata row. Turn off to restore expanded items."
+          {...setting("compact-sidebar-cards")}
+          description={gt(
+            "Show provider logos beside the project and hide the metadata row. Turn off to restore expanded items.",
+          )}
           resetAction={
             settings.sidebarCompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarCompactCards ? (
               <SettingResetButton
-                label="compact sidebar items"
+                ariaLabel={gt("Reset compact sidebar items to default")}
                 onClick={() =>
                   updateSettings({
                     sidebarCompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarCompactCards,
@@ -987,19 +989,21 @@ export function GeneralSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ sidebarCompactCards: Boolean(checked) })
               }
-              aria-label="Compact sidebar items"
+              aria-label={gt("Compact sidebar items")}
             />
           }
         />
 
         <SettingsRow
-          {...searchableSetting("single-line-sidebar-threads")}
-          description="Show sidebar threads as a project icon and title. Hover for the time and thread actions."
+          {...setting("single-line-sidebar-threads")}
+          description={gt(
+            "Show sidebar threads as a project icon and title. Hover for the time and thread actions.",
+          )}
           resetAction={
             settings.sidebarSingleLineThreads !==
             DEFAULT_UNIFIED_SETTINGS.sidebarSingleLineThreads ? (
               <SettingResetButton
-                label="single-line sidebar threads"
+                ariaLabel={gt("Reset single-line sidebar threads to default")}
                 onClick={() =>
                   updateSettings({
                     sidebarSingleLineThreads: DEFAULT_UNIFIED_SETTINGS.sidebarSingleLineThreads,
@@ -1014,18 +1018,18 @@ export function GeneralSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ sidebarSingleLineThreads: Boolean(checked) })
               }
-              aria-label="Single-line sidebar threads"
+              aria-label={gt("Single-line sidebar threads")}
             />
           }
         />
 
         <SettingsRow
-          {...searchableSetting("pinned-thread-placement")}
-          description="Place the pinned threads drawer above or below your active threads."
+          {...setting("pinned-thread-placement")}
+          description={gt("Place the pinned threads drawer above or below your active threads.")}
           resetAction={
             settings.sidebarPinnedPlacement !== DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPlacement ? (
               <SettingResetButton
-                label="pinned threads position"
+                ariaLabel={gt("Reset pinned threads position to default")}
                 onClick={() =>
                   updateSettings({
                     sidebarPinnedPlacement: DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPlacement,
@@ -1046,18 +1050,18 @@ export function GeneralSettingsPanel() {
               <SelectTrigger
                 size="sm"
                 className="w-full sm:w-44"
-                aria-label="Pinned threads position"
+                aria-label={gt("Pinned threads position")}
               >
                 <SelectValue>
-                  {settings.sidebarPinnedPlacement === "top" ? "Top" : "Bottom"}
+                  {settings.sidebarPinnedPlacement === "top" ? gt("Top") : gt("Bottom")}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 <SelectItem hideIndicator value="top">
-                  Top
+                  <T>Top</T>
                 </SelectItem>
                 <SelectItem hideIndicator value="bottom">
-                  Bottom
+                  <T>Bottom</T>
                 </SelectItem>
               </SelectPopup>
             </Select>
@@ -1065,12 +1069,12 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          {...searchableSetting("pinned-thread-max-rows")}
-          description="Wrap pinned icons into this many rows before showing +N."
+          {...setting("pinned-thread-max-rows")}
+          description={gt("Wrap pinned icons into this many rows before showing +N.")}
           resetAction={
             settings.sidebarPinnedMaxRows !== DEFAULT_UNIFIED_SETTINGS.sidebarPinnedMaxRows ? (
               <SettingResetButton
-                label="pinned icon rows"
+                ariaLabel={gt("Reset pinned icon rows to default")}
                 onClick={() =>
                   updateSettings({
                     sidebarPinnedMaxRows: DEFAULT_UNIFIED_SETTINGS.sidebarPinnedMaxRows,
@@ -1096,16 +1100,23 @@ export function GeneralSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger size="sm" className="w-full sm:w-44" aria-label="Pinned icon rows">
+              <SelectTrigger
+                size="sm"
+                className="w-full sm:w-44"
+                aria-label={gt("Pinned icon rows")}
+              >
                 <SelectValue>
-                  {settings.sidebarPinnedMaxRows}{" "}
-                  {settings.sidebarPinnedMaxRows === 1 ? "row" : "rows"}
+                  {gt("{count, plural, one {{count} row} other {{count} rows}}", {
+                    count: settings.sidebarPinnedMaxRows,
+                  })}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 {[1, 2, 3, 4, 5, 6].map((rows) => (
                   <SelectItem hideIndicator key={rows} value={String(rows)}>
-                    {rows} {rows === 1 ? "row" : "rows"}
+                    {gt("{count, plural, one {{count} row} other {{count} rows}}", {
+                      count: rows,
+                    })}
                   </SelectItem>
                 ))}
               </SelectPopup>
@@ -1114,13 +1125,15 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          {...searchableSetting("pinned-thread-pop-out")}
-          description="Move pins into Active when they finish or need your attention. Turn off to keep them in the drawer with their status badges."
+          {...setting("pinned-thread-pop-out")}
+          description={gt(
+            "Move pins into Active when they finish or need your attention. Turn off to keep them in the drawer with their status badges.",
+          )}
           resetAction={
             settings.sidebarPinnedPopOutWhenReady !==
             DEFAULT_UNIFIED_SETTINGS.sidebarPinnedPopOutWhenReady ? (
               <SettingResetButton
-                label="pop out ready pins"
+                ariaLabel={gt("Reset pop out ready pins to default")}
                 onClick={() =>
                   updateSettings({
                     sidebarPinnedPopOutWhenReady:
@@ -1136,7 +1149,7 @@ export function GeneralSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ sidebarPinnedPopOutWhenReady: Boolean(checked) })
               }
-              aria-label="Pop out ready pins"
+              aria-label={gt("Pop out ready pins")}
             />
           }
         />
@@ -2257,16 +2270,18 @@ export function ThreadsSettingsPanel() {
         </SettingsSection>
       ) : null}
 
-      <SettingsSection id="computer-use" title="Computer Use">
+      <SettingsSection id="computer-use" title={gt("Computer Use")}>
         <SettingsRow
           serverScoped
           settingKeys={["computerUseAutoApproveAppAccess"]}
           {...setting("computer-use-auto-approve-app-access")}
-          description="Automatically accept Codex Computer Use access to native apps, including newly generated apps. Turn off to ask again for new requests."
+          description={gt(
+            "Automatically accept Codex Computer Use access to native apps, including newly generated apps. Turn off to ask again for new requests.",
+          )}
           resetAction={
             settings.computerUseAutoApproveAppAccess ? (
               <SettingResetButton
-                label="Computer Use app-access approval"
+                ariaLabel={gt("Reset Computer Use app-access approval to default")}
                 onClick={() => updateSettings({ computerUseAutoApproveAppAccess: false })}
               />
             ) : null
@@ -2274,7 +2289,7 @@ export function ThreadsSettingsPanel() {
           control={
             <ScopedSwitch
               settingKeys={["computerUseAutoApproveAppAccess"]}
-              aria-label="Auto-approve app access"
+              aria-label={gt("Auto-approve app access")}
               checked={settings.computerUseAutoApproveAppAccess}
               onCheckedChange={(checked) =>
                 updateSettings({ computerUseAutoApproveAppAccess: Boolean(checked) })
@@ -2324,12 +2339,12 @@ export function ThreadsSettingsPanel() {
       </SettingsSection>
 
       {hasServerTargets ? (
-        <SettingsSection id="auto-settle" title="Automatic thread organization">
+        <SettingsSection id="auto-settle" title={gt("Automatic thread organization")}>
           <SettingsRow
             serverScoped
             {...setting("automatic-thread-action")}
             settingKeys={["sidebarAutoSnoozePreset", "sidebarAutoSettleAfterDays"]}
-            description="Choose what happens after a thread has been inactive."
+            description={gt("Choose what happens after a thread has been inactive.")}
             control={
               <Select
                 value={automaticAction}
@@ -2348,19 +2363,25 @@ export function ThreadsSettingsPanel() {
                     });
                 }}
               >
-                <SelectTrigger size="sm" aria-label="Action for inactive threads">
+                <SelectTrigger size="sm" aria-label={gt("Action for inactive threads")}>
                   <SelectValue>
                     {automaticAction === "off"
-                      ? "Off"
+                      ? gt("Off")
                       : automaticAction === "settle"
-                        ? "Settle"
-                        : "Snooze"}
+                        ? gt("Settle")
+                        : gt("Snooze")}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value="off">Off</SelectItem>
-                  <SelectItem value="snooze">Snooze</SelectItem>
-                  <SelectItem value="settle">Settle</SelectItem>
+                  <SelectItem value="off">
+                    <T>Off</T>
+                  </SelectItem>
+                  <SelectItem value="snooze">
+                    <T>Snooze</T>
+                  </SelectItem>
+                  <SelectItem value="settle">
+                    <T>Settle</T>
+                  </SelectItem>
                 </SelectPopup>
               </Select>
             }
@@ -2370,11 +2391,13 @@ export function ThreadsSettingsPanel() {
               serverScoped
               settingKeys={["sidebarAutoSettleAfterDays"]}
               {...setting("days-before-auto-settle")}
-              title="Days of inactivity"
+              title={gt("Days of inactivity")}
               description={
                 settings.sidebarAutoSnoozePreset === "settle"
-                  ? "Settle a thread after this many days without activity."
-                  : "After this many days without activity, snooze the thread for the duration selected below."
+                  ? gt("Settle a thread after this many days without activity.")
+                  : gt(
+                      "After this many days without activity, snooze the thread for the duration selected below.",
+                    )
               }
               control={
                 <AutoSettleDaysInput
@@ -2391,7 +2414,9 @@ export function ThreadsSettingsPanel() {
               serverScoped
               {...setting("automatic-snooze-duration")}
               settingKeys={["sidebarAutoSnoozePreset"]}
-              description="Choose how long to snooze threads automatically. Longest available picks the latest wake time. Calendar times use this environment’s time zone."
+              description={gt(
+                "Choose how long to snooze threads automatically. Longest available picks the latest wake time. Calendar times use this environment’s time zone.",
+              )}
               control={
                 <Select
                   value={settings.sidebarAutoSnoozePreset}
@@ -2399,11 +2424,11 @@ export function ThreadsSettingsPanel() {
                     if (value !== null) updateSettings({ sidebarAutoSnoozePreset: value });
                   }}
                 >
-                  <SelectTrigger size="sm" aria-label="Automatic snooze duration">
+                  <SelectTrigger size="sm" aria-label={gt("Automatic snooze duration")}>
                     <SelectValue>
                       {snoozeOptions.find(
                         (option) => option.value === settings.sidebarAutoSnoozePreset,
-                      )?.label ?? "Longest available"}
+                      )?.label ?? gt("Longest available")}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -2421,8 +2446,10 @@ export function ThreadsSettingsPanel() {
             <SettingsRow
               serverScoped
               settingKeys={["sidebarAutoSettleKeepPullRequests"]}
-              title="Keep threads with a PR"
-              description="Skip inactivity rules for threads with a pull request. Merge and close rules still apply."
+              title={gt("Keep threads with a PR")}
+              description={gt(
+                "Skip inactivity rules for threads with a pull request. Merge and close rules still apply.",
+              )}
               control={
                 <ScopedSwitch
                   settingKeys={["sidebarAutoSettleKeepPullRequests"]}
@@ -2430,7 +2457,7 @@ export function ThreadsSettingsPanel() {
                   onCheckedChange={(checked) =>
                     updateSettings({ sidebarAutoSettleKeepPullRequests: checked })
                   }
-                  aria-label="Keep threads with a PR"
+                  aria-label={gt("Keep threads with a PR")}
                 />
               }
             />
@@ -2439,8 +2466,10 @@ export function ThreadsSettingsPanel() {
             serverScoped
             settingKeys={["sidebarAutoSettleOnMerge"]}
             {...setting("auto-settle-merged-threads")}
-            title="Settle when a PR merges"
-            description="Settle threads when their pull requests merge. Closed pull requests also settle automatically."
+            title={gt("Settle when a PR merges")}
+            description={gt(
+              "Settle threads when their pull requests merge. Closed pull requests also settle automatically.",
+            )}
             resetAction={
               settings.sidebarAutoSettleOnMerge !==
               DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge ? (
@@ -2461,7 +2490,7 @@ export function ThreadsSettingsPanel() {
                 onCheckedChange={(checked) =>
                   updateSettings({ sidebarAutoSettleOnMerge: Boolean(checked) })
                 }
-                aria-label="Settle when a PR merges"
+                aria-label={gt("Settle when a PR merges")}
               />
             }
           />
