@@ -101,6 +101,7 @@ import {
   DispatchModeLimit,
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
+import { formatTurnItemOutline } from "../orchestration-v2/threadOutline.ts";
 import type {
   ProjectionRecordField,
   ProjectionRecordFilter,
@@ -1212,9 +1213,10 @@ function timelineItem(input: {
   readonly row: OrchestrationV2ThreadProjection["visibleTurnItems"][number];
   readonly maxChars: number;
   readonly textOffset?: number;
+  readonly outline?: boolean;
   readonly messagesByThreadId: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection["messages"]>;
 }): OrchestratorMcpThreadTimelineItem {
-  const text = turnItemText(input.row.item);
+  const text = input.outline ? formatTurnItemOutline(input.row.item) : turnItemText(input.row.item);
   const offset = input.textOffset ?? 0;
   const end = textPageEnd(text, offset, input.maxChars);
   const textTruncated = text !== null && text.length > end;
@@ -3538,7 +3540,7 @@ const make = Effect.gen(function* () {
             ? { beforePosition: input.beforePosition ?? Number.POSITIVE_INFINITY }
             : {}),
           limit,
-          view,
+          view: view === "messages" ? "messages" : "activity",
           ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
         })
         .pipe(Effect.mapError(threadManagementFailure));
@@ -3579,6 +3581,7 @@ const make = Effect.gen(function* () {
         timeline.items.map((row) => ({
           row,
           maxChars,
+          ...(view === "outline" ? { outline: true } : {}),
           messagesByThreadId,
           ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
         })),
