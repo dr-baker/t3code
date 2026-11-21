@@ -2,6 +2,8 @@ import {
   type CommandId,
   type RuntimeRequestId,
   ThreadId,
+  PositiveInt,
+  THREAD_WATCH_OVERSIGHT_DEFAULTS,
   type OrchestrationV2ThreadProjection,
   type RunId,
   OrchestratorMcpFailure,
@@ -403,12 +405,27 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   t3_thread_watch: writesThread((input) =>
     Effect.gen(function* () {
       if (input.watching !== false) yield* readThread(input.targetThreadId, []);
+      const oversight =
+        input.watching === false ||
+        (input.oversight !== true &&
+          input.progressEveryItems === undefined &&
+          input.progressEverySeconds === undefined)
+          ? undefined
+          : {
+              everyItems: PositiveInt.make(
+                input.progressEveryItems ?? THREAD_WATCH_OVERSIGHT_DEFAULTS.everyItems,
+              ),
+              everySeconds: PositiveInt.make(
+                input.progressEverySeconds ?? THREAD_WATCH_OVERSIGHT_DEFAULTS.everySeconds,
+              ),
+            };
       const result = yield* dispatch(input.threadId, (common) => ({
         ...common,
         type: "thread.watch",
         targetThreadId: input.targetThreadId,
         watching: input.watching ?? true,
         ...(input.until === undefined ? {} : { until: input.until }),
+        ...(oversight === undefined ? {} : { oversight }),
       }));
       return {
         ...result,
@@ -416,7 +433,10 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         ...(input.watching === false
           ? {}
           : {
-              next: "T3 checks the current state and watches future events. Updates wake this thread automatically. End your turn when no independent work remains; do not poll or schedule checks.",
+              next:
+                oversight === undefined
+                  ? "T3 checks the current state and watches future events. Updates wake this thread automatically. End your turn when no independent work remains; do not poll or schedule checks."
+                  : "T3 watches this thread mid-turn and wakes you on commentary and every cadence check-in with an inline outline delta. Reply `[watch:ok]` when progress looks healthy; end your turn when no independent work remains and do not poll.",
             }),
       };
     }),

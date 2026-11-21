@@ -2,12 +2,15 @@ import {
   CommandId,
   EventId,
   MessageId,
+  NonNegativeInt,
   THREAD_WATCH_LIMITS,
+  THREAD_WATCH_OVERSIGHT_DEFAULTS,
   type OrchestrationV2DomainEvent,
   type ThreadId,
   type ThreadWatch,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
@@ -21,6 +24,12 @@ import { turnItemCanChangeUserWait } from "@t3tools/shared/agentAwareness";
 import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import {
+  formatOversightOutlineDelta,
+  isOversightCommentaryItem,
+  isOversightCountedStep,
+  isTurnItemSettled,
+} from "./threadOutline.ts";
 import {
   threadWatchChange,
   threadWatchHasPendingWork,
@@ -50,6 +59,7 @@ export const make = Effect.gen(function* () {
   const store = yield* OrchestrationEventStore.OrchestrationEventStore;
   const lock = yield* Semaphore.make(1);
   let watchedIds = new Set<ThreadId>();
+  let oversightWatchedIds = new Set<ThreadId>();
 
   const readWatch = Effect.fn("ThreadWatchReactor.readWatch")(function* (
     ownerId: ThreadId,
@@ -57,7 +67,14 @@ export const make = Effect.gen(function* () {
   ) {
     const progress = watch.progress ?? { cursor: 0, reported: [], baselinePending: true };
     const through = yield* store.latestAgentSequence(watch.threadId);
-    if (!progress.baselinePending && through <= progress.cursor) return;
+    const target = yield* projections.getThreadShell(watch.threadId);
+    const workPending = threadWatchHasPendingWork(target);
+    if (
+      !progress.baselinePending &&
+      through <= progress.cursor &&
+      (watch.oversight === undefined || !workPending)
+    )
+      return;
     const batches = yield* Effect.forEach(WATCH_EVENT_TYPES, (eventType) =>
       store
         .readAgentEvents({
@@ -73,8 +90,7 @@ export const make = Effect.gen(function* () {
     const changes: Array<NonNullable<ReturnType<typeof threadWatchChange>>> = [];
     let causalThreadIds = [watch.threadId, ownerId];
     let ended = false;
-    const target = yield* projections.getThreadShell(watch.threadId);
-    const workPending = threadWatchHasPendingWork(target);
+    const isOwnedDelegateOversight = watch.oversight?.ownedDelegate === true;
 
     const record = Effect.fn("ThreadWatchReactor.recordChange")(function* (
       event: OrchestrationV2DomainEvent,
@@ -128,7 +144,12 @@ export const make = Effect.gen(function* () {
         }
       }
       const request = target?.pendingRuntimeRequest;
-      if (!ended && request != null && !reported.has(`request:${request.id}`)) {
+      if (
+        !ended &&
+        !isOwnedDelegateOversight &&
+        request != null &&
+        !reported.has(`request:${request.id}`)
+      ) {
         const change = request.userOnly
           ? { text: "needs the user", outcome: "updated" as const, ended: false }
           : threadWatchChange({
@@ -148,6 +169,76 @@ export const make = Effect.gen(function* () {
         }
       }
     }
+    if (isOwnedDelegateOversight) {
+      // Owned delegates already deliver completion and question wakes through delegate_task.
+      changes.length = 0;
+    }
+
+    let nextLastOutlinePosition = progress.lastOutlinePosition;
+    let nextLastCheckInAtMs = progress.lastCheckInAtMs;
+    let oversightWake:
+      | {
+          readonly reason: string;
+          readonly outline: string;
+          readonly wakeStamp: string;
+        }
+      | undefined;
+
+    if (
+      !ended &&
+      watch.oversight !== undefined &&
+      target !== null &&
+      workPending &&
+      changes.length === 0
+    ) {
+      const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+      const lastCheckInAtMs = progress.lastCheckInAtMs ?? nowMs;
+      const page = yield* projections.getTimelinePage(watch.threadId, {
+        afterPosition: progress.lastOutlinePosition ?? -1,
+        limit: Math.max(
+          watch.oversight.everyItems + THREAD_WATCH_OVERSIGHT_DEFAULTS.inlineOutlineMaxItems,
+          50,
+        ),
+        view: "activity",
+      });
+      const settledRows = page.items.filter((row) => isTurnItemSettled(row.item));
+      const commentaryDue = settledRows.some((row) =>
+        isOversightCommentaryItem(row.item, target.activeRunId !== null),
+      );
+      const countedSteps = settledRows.filter((row) => isOversightCountedStep(row.item)).length;
+      const itemsDue = countedSteps >= watch.oversight.everyItems;
+      const elapsedMs = nowMs - lastCheckInAtMs;
+      const timeDue = elapsedMs >= watch.oversight.everySeconds * 1000;
+      if (commentaryDue || itemsDue || timeDue) {
+        const runId = target.activeRunId ?? target.latestRunId;
+        const message =
+          runId === null ? undefined : yield* projections.getRunMessage(watch.threadId, runId);
+        const path = threadWatchWakePath(watch.threadId, ownerId, message?.notification?.source);
+        if (path !== null) {
+          causalThreadIds = path;
+          const latestSettled = settledRows.at(-1);
+          if (latestSettled !== undefined) {
+            nextLastOutlinePosition = NonNegativeInt.make(latestSettled.position);
+          }
+          nextLastCheckInAtMs = NonNegativeInt.make(nowMs);
+          const reason = commentaryDue
+            ? "commentary update"
+            : itemsDue
+              ? `${countedSteps} new steps`
+              : `${Math.max(1, Math.round(elapsedMs / 60_000))}m elapsed`;
+          const deltaText = formatOversightOutlineDelta(settledRows);
+          oversightWake = {
+            reason,
+            outline:
+              deltaText.length > 0
+                ? deltaText
+                : "(still working; no new settled steps since last check-in)",
+            wakeStamp: `${nextLastOutlinePosition ?? -1}:${nowMs}`,
+          };
+        }
+      }
+    }
+
     const next = {
       ...watch,
       title: target?.title || watch.title,
@@ -156,6 +247,10 @@ export const make = Effect.gen(function* () {
         cursor: Math.max(progress.cursor, through),
         reported: [...reported].slice(-THREAD_WATCH_LIMITS.reportedChanges),
         baselinePending: false,
+        ...(nextLastOutlinePosition === undefined
+          ? {}
+          : { lastOutlinePosition: nextLastOutlinePosition }),
+        ...(nextLastCheckInAtMs === undefined ? {} : { lastCheckInAtMs: nextLastCheckInAtMs }),
       },
       ended,
     };
@@ -163,34 +258,56 @@ export const make = Effect.gen(function* () {
     if (
       !progress.baselinePending &&
       changes.length === 0 &&
+      oversightWake === undefined &&
       watch.title === next.title &&
       watch.workPending === next.workPending &&
       watch.ended === next.ended
     )
       return;
-    const key = `${watch.id}:${next.progress.cursor}:${progress.baselinePending ? "baseline" : "events"}`;
+    const key =
+      oversightWake !== undefined
+        ? `${watch.id}:oversight:${oversightWake.wakeStamp}`
+        : `${watch.id}:${next.progress.cursor}:${progress.baselinePending ? "baseline" : "events"}`;
     const last = changes.at(-1);
     const quotedTitle = yield* encodeTitle(next.title);
+    const wake =
+      oversightWake !== undefined
+        ? {
+            messageId: MessageId.make(`message:thread-watch:${key}`),
+            causalThreadIds,
+            oversightCheckIn: true,
+            text: [
+              `Oversight check-in on ${quotedTitle} (${watch.threadId}) (${oversightWake.reason}):`,
+              oversightWake.outline,
+              "",
+              `If progress looks healthy, reply \`${THREAD_WATCH_OVERSIGHT_DEFAULTS.quietAckToken}\` (with an optional 1-line note) and end your turn.`,
+              `If something looks off or uncertain, question it first via \`t3_thread_send\` (\`mode:"steer"\`) asking for a brief commentary reply before overruling. Inspect raw details with \`t3_thread_read\` (\`view:"activity"\`, \`itemId\`).`,
+            ].join("\n"),
+            notification: {
+              source: { kind: "monitor" as const },
+              outcome: "updated" as const,
+              summary: `${next.title} (${oversightWake.reason})`,
+            },
+          }
+        : last === undefined
+          ? undefined
+          : {
+              messageId: MessageId.make(`message:thread-watch:${key}`),
+              causalThreadIds,
+              text: `Watched thread ${quotedTitle} (${watch.threadId}):\n${[...new Set(changes.map((change) => change.text))].map((text) => `- ${text}`).join("\n")}\nRead its current state with t3_thread_read before acting.${ended ? " This watch has ended." : " The watch remains active."}`,
+              notification: {
+                source: { kind: "monitor" as const },
+                outcome: last.outcome,
+                summary: `${next.title} ${last.text}`,
+              },
+            };
     yield* engine.dispatch({
       type: "thread.watch.sync",
       threadId: ownerId,
       commandId: CommandId.make(`server:thread-watch:${key}`),
       expectedCursor: progress.cursor,
       watch: next,
-      ...(last === undefined
-        ? {}
-        : {
-            wake: {
-              messageId: MessageId.make(`message:thread-watch:${key}`),
-              causalThreadIds,
-              text: `Watched thread ${quotedTitle} (${watch.threadId}):\n${[...new Set(changes.map((change) => change.text))].map((text) => `- ${text}`).join("\n")}\nRead its current state with t3_thread_read before acting.${ended ? " This watch has ended." : " The watch remains active."}`,
-              notification: {
-                source: { kind: "monitor" },
-                outcome: last.outcome,
-                summary: `${next.title} ${last.text}`,
-              },
-            },
-          }),
+      ...(wake === undefined ? {} : { wake }),
     });
   });
 
@@ -201,6 +318,13 @@ export const make = Effect.gen(function* () {
         owners.flatMap((owner) =>
           (owner.threadWatches ?? [])
             .filter((watch) => !watch.ended)
+            .map((watch) => watch.threadId),
+        ),
+      );
+      oversightWatchedIds = new Set(
+        owners.flatMap((owner) =>
+          (owner.threadWatches ?? [])
+            .filter((watch) => !watch.ended && watch.oversight !== undefined)
             .map((watch) => watch.threadId),
         ),
       );
@@ -231,6 +355,7 @@ export const make = Effect.gen(function* () {
           Stream.filter(
             ({ event }) =>
               event.type === "thread.watches-updated" ||
+              (oversightWatchedIds.has(event.threadId) && event.type === "turn-item.updated") ||
               (watchedIds.has(event.threadId) &&
                 (threadWatchChange(event) !== null ||
                   event.type === "runtime-request.updated" ||
