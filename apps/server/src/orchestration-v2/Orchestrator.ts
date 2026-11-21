@@ -33,6 +33,7 @@ import {
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
   MessageId,
+  NonNegativeInt,
   type NodeId,
   type ModelSelection,
   OrchestrationV2Command,
@@ -4205,9 +4206,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause: "Only an active independently controlled thread can watch another thread.",
           });
         }
-        if (watches.some((watch) => watch.threadId === command.targetThreadId && !watch.ended))
-          return;
-        const cursor = yield* eventSink.latestSequence().pipe(mapDispatchError(command));
+        const existing = watches.find(
+          (watch) => watch.threadId === command.targetThreadId && !watch.ended,
+        );
+        const requestedUntil = command.until ?? existing?.until ?? "turn";
         const target = yield* projectionStore
           .getThreadShell(command.targetThreadId)
           .pipe(mapDispatchError(command));
@@ -4218,6 +4220,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause: "The watched thread is no longer available.",
           });
         }
+        const isOwnedDelegate =
+          target.delegatedFrom?.threadId === thread.id ||
+          (target.lineage.relationshipToParent === "subagent" &&
+            target.lineage.parentThreadId === thread.id);
+        const oversight =
+          command.oversight === undefined
+            ? existing?.oversight
+            : {
+                ...command.oversight,
+                ...(isOwnedDelegate ? { ownedDelegate: true } : {}),
+              };
+        const effectiveUntil =
+          oversight?.ownedDelegate === true && command.until === undefined
+            ? "turn"
+            : requestedUntil;
+        if (
+          existing !== undefined &&
+          existing.until === effectiveUntil &&
+          existing.oversight?.everyItems === oversight?.everyItems &&
+          existing.oversight?.everySeconds === oversight?.everySeconds &&
+          existing.oversight?.ownedDelegate === oversight?.ownedDelegate
+        )
+          return;
+        const cursor = yield* eventSink.latestSequence().pipe(mapDispatchError(command));
+        const nowMs = NonNegativeInt.make(DateTime.toEpochMillis(yield* DateTime.now));
         const retained = watches.filter((watch) => watch.threadId !== target.id);
         if (retained.length >= THREAD_WATCH_LIMITS.registrations) {
           return yield* new OrchestratorDispatchError({
@@ -4226,16 +4253,41 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause: `A thread can watch at most ${THREAD_WATCH_LIMITS.registrations} threads. Remove an existing watch first.`,
           });
         }
+        let initialOutlinePosition = existing?.progress?.lastOutlinePosition;
+        if (oversight !== undefined && initialOutlinePosition === undefined) {
+          const latestPage = yield* projectionStore
+            .getTimelinePage(target.id, {
+              beforePosition: Number.POSITIVE_INFINITY,
+              limit: 1,
+              view: "activity",
+            })
+            .pipe(mapDispatchError(command));
+          const latestRow = latestPage.items.at(-1);
+          if (latestRow !== undefined) {
+            initialOutlinePosition = NonNegativeInt.make(latestRow.position);
+          }
+        }
         next = [
           ...retained,
           {
-            id: command.commandId,
+            id: existing?.id ?? command.commandId,
             threadId: target.id,
             title: target.title,
             workPending: threadWatchHasPendingWork(target),
-            progress: { cursor, reported: [], baselinePending: true },
+            ...(oversight === undefined ? {} : { oversight }),
+            progress: {
+              cursor: existing?.progress?.cursor ?? cursor,
+              reported: existing?.progress?.reported ?? [],
+              baselinePending: existing?.progress?.baselinePending ?? true,
+              ...(initialOutlinePosition === undefined
+                ? {}
+                : { lastOutlinePosition: initialOutlinePosition }),
+              ...(oversight === undefined
+                ? {}
+                : { lastCheckInAtMs: existing?.progress?.lastCheckInAtMs ?? nowMs }),
+            },
             ended: false,
-            until: command.until ?? "turn",
+            until: effectiveUntil,
           },
         ];
       }
@@ -4307,6 +4359,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 ...(command.wake.causalThreadIds === undefined
                   ? {}
                   : { causalThreadIds: command.wake.causalThreadIds }),
+                ...(command.wake.oversightCheckIn === true ? { oversightCheckIn: true } : {}),
               },
             },
           },

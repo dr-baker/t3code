@@ -1,7 +1,9 @@
 import {
   EnvironmentId,
   NodeId,
+  NonNegativeInt,
   type OrchestratorMcpThreadReadResult,
+  type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
   ProjectId,
@@ -675,6 +677,129 @@ it("readThread keeps an activity page within an MCP client's output limit and pa
       maxCharsPerItem: 50_000,
     });
     expect(underHugeTitle.items[0]?.text?.length).toBeGreaterThan(1_000);
+  }).pipe(Effect.provide(layer), Effect.runPromise);
+});
+
+it("readThread view='outline' returns compact headers while view='activity' with itemId drills into full payloads", async () => {
+  const itemBase = {
+    threadId: parentThreadId,
+    runId: activeRunId,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    title: null,
+    startedAt: now,
+    completedAt: now,
+    updatedAt: now,
+  } as const;
+  const rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = [
+    {
+      position: 0,
+      visibility: "local",
+      sourceThreadId: parentThreadId,
+      sourceItemId: TurnItemId.make("outline-item-reasoning"),
+      item: {
+        ...itemBase,
+        id: TurnItemId.make("outline-item-reasoning"),
+        ordinal: NonNegativeInt.make(0),
+        type: "reasoning",
+        status: "completed",
+        text: "Verifying why the retry loop re-reads state.",
+        streaming: false,
+      },
+    },
+    {
+      position: 1,
+      visibility: "local",
+      sourceThreadId: parentThreadId,
+      sourceItemId: TurnItemId.make("outline-item-diff"),
+      item: {
+        ...itemBase,
+        id: TurnItemId.make("outline-item-diff"),
+        ordinal: NonNegativeInt.make(1),
+        type: "file_change",
+        status: "completed",
+        fileName: "src/retry.ts",
+        additions: NonNegativeInt.make(8),
+        deletions: NonNegativeInt.make(3),
+        diffStr: "@@ -1,3 +1,8 @@\n+FULL RAW DIFF PAYLOAD",
+      },
+    },
+  ];
+  const projection = {
+    thread: baseThread({
+      threadId: parentThreadId,
+      title: "Parent",
+      instanceId: parentInstanceId,
+      model: "gpt-5.4",
+    }),
+    runs: [makeRun({ id: activeRunId, ordinal: 1, status: "running" })],
+    visibleTurnItems: rows,
+    providerTurns: [],
+    runtimeRequests: [],
+    messages: [],
+    contextTransfers: [],
+    subagents: [],
+    updatedAt: now,
+  } as unknown as OrchestrationV2ThreadProjection;
+  const layer = layerOrchestratorService.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getTimelinePage: (_threadId, options) => {
+            const after =
+              options.itemId === undefined
+                ? rows.filter((row) => row.position > (options.afterPosition ?? -1))
+                : rows.filter((row) => row.sourceItemId === options.itemId);
+            return Effect.succeed({
+              items: after.slice(0, options.limit),
+              totalItems: rows.length,
+              hasMore: after.length > options.limit,
+              hasEarlier: false,
+            });
+          },
+          getThreadRecords: () => Effect.succeed(projection),
+          getProjectThreadRecords: () => Effect.succeed(projection),
+          getThreadShell: () =>
+            Effect.succeed(projection.thread as unknown as OrchestrationV2ThreadShell),
+        } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
+        ServerSettings.layerTest(),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.succeed([]),
+        } satisfies Partial<ProviderRegistry.ProviderRegistry["Service"]>),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+          list: () => Effect.succeed({ tasks: [] }),
+        } satisfies Partial<ScheduledTaskService.ScheduledTaskService["Service"]>),
+        Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+          list: () => Effect.succeed([]),
+        } satisfies Partial<ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]>),
+        NodeCrypto.layer,
+      ),
+    ),
+  );
+
+  await Effect.gen(function* () {
+    const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+    const outline = yield* service.readThread(makeScope(), {
+      threadId: parentThreadId,
+      view: "outline",
+      afterPosition: -1,
+    });
+    expect(outline.items.map((item) => item.text)).toEqual([
+      "Verifying why the retry loop re-reads state.",
+      "src/retry.ts (+8 -3)",
+    ]);
+    const drillDown = yield* service.readThread(makeScope(), {
+      threadId: parentThreadId,
+      view: "activity",
+      itemId: TurnItemId.make("outline-item-diff"),
+    });
+    expect(drillDown.items[0]?.text).toContain("FULL RAW DIFF PAYLOAD");
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
 

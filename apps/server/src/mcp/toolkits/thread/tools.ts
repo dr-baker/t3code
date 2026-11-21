@@ -18,7 +18,9 @@ import {
   ThreadId,
   RunId,
   NonNegativeInt,
+  PositiveInt,
   ProjectId,
+  THREAD_WATCH_OVERSIGHT_DEFAULTS,
   clampedPositiveInt,
 } from "@t3tools/contracts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -85,13 +87,23 @@ const ThreadWatchTool = Tool.make("t3_thread_watch", {
     next: Schema.optional(Schema.String),
   }),
   description:
-    "Watch another thread in this environment without polling. Omit threadId for this thread. T3 wakes this thread on completion, failure, stop, questions or approvals. Default until=turn watches current or next work and ends when it finishes; until=settled watches later turns too. watching=false stops the watch and cancels undelivered wakes. Watches survive restarts and appear in the sidebar. After registering, end your turn; do not schedule or poll. Use delegate_task completion wakes for owned tasks instead.",
+    "Watch another thread in this environment without polling. Omit threadId for this thread. Default wakes on completion, failure, stop, questions or approvals (`until=turn` or `settled`). Set `oversight:true` ONLY when the user explicitly asks to actively monitor, babysit, or oversee a running thread or delegated child: wakes mid-turn on commentary and every 20 items or 5 minutes (override via `progressEveryItems`/`progressEverySeconds`) with a compact outline delta. Never attach oversight to ordinary delegates unasked. `watching=false` stops the watch. After registering, end your turn; do not poll.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     threadId: Schema.optional(ThreadId),
     targetThreadId: ThreadId,
     watching: Schema.optional(Schema.Boolean),
     until: Schema.optional(Schema.Literals(["turn", "settled"])),
+    oversight: Schema.optional(Schema.Boolean),
+    progressEveryItems: Schema.optional(
+      PositiveInt.check(Schema.isLessThanOrEqualTo(THREAD_WATCH_OVERSIGHT_DEFAULTS.maxEveryItems)),
+    ),
+    progressEverySeconds: Schema.optional(
+      PositiveInt.check(
+        Schema.isGreaterThanOrEqualTo(THREAD_WATCH_OVERSIGHT_DEFAULTS.minEverySeconds),
+        Schema.isLessThanOrEqualTo(THREAD_WATCH_OVERSIGHT_DEFAULTS.maxEverySeconds),
+      ),
+    ),
   }),
 })
   .annotate(Tool.Title, "Watch a thread")

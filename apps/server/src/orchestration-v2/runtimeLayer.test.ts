@@ -22,6 +22,8 @@ import {
   NodeId,
   RuntimeRequestId,
   TurnItemId,
+  PositiveInt,
+  NonNegativeInt,
   type ModelSelection,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
@@ -1677,6 +1679,239 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         );
         yield* restarted.sweep;
         assert.equal((yield* notices()).length, 5);
+      }),
+  );
+
+  it.effect(
+    "ThreadWatchReactor wakes oversight watches on commentary, item count, and time without duplicating owned-delegate completion",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        yield* seedProject({
+          projectId: ProjectId.make("oversight-project"),
+          title: "Oversight Project",
+          workspaceRoot: "/tmp/oversight-project",
+          defaultModelSelection: modelSelection,
+          createdAt: "2026-11-21T00:00:00.000Z",
+        });
+        const ownerId = ThreadId.make("oversight-owner");
+        const childId = ThreadId.make("oversight-child");
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("oversight-owner:create"),
+          threadId: ownerId,
+          projectId: ProjectId.make("oversight-project"),
+          title: "Parent",
+          modelSelection,
+          createdBy: "user",
+          creationSource: "web",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+        });
+        const ownerThread = (yield* engine.getThreadProjection(ownerId)).thread;
+        yield* sink.write({
+          commandId: CommandId.make("oversight-child:create"),
+          events: [
+            {
+              id: EventId.make("oversight-child:create"),
+              type: "thread.created",
+              threadId: childId,
+              providerInstanceId: ownerThread.providerInstanceId,
+              occurredAt: now,
+              payload: {
+                ...ownerThread,
+                id: childId,
+                title: "Astra Worker",
+                createdBy: "agent",
+                creationSource: "server",
+                lineage: {
+                  parentThreadId: ownerId,
+                  rootThreadId: ownerId,
+                  relationshipToParent: "subagent",
+                },
+              },
+            },
+          ],
+        });
+        yield* engine.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("oversight-child:msg"),
+          threadId: childId,
+          messageId: MessageId.make("oversight-child:msg"),
+          text: "Implement feature",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "agent",
+          creationSource: "server",
+        });
+        const childRun = (yield* engine.getThreadProjection(childId)).runs[0]!;
+        yield* engine.dispatch({
+          type: "thread.watch",
+          commandId: CommandId.make("oversight-watch"),
+          threadId: ownerId,
+          targetThreadId: childId,
+          watching: true,
+          oversight: {
+            everyItems: PositiveInt.make(3),
+            everySeconds: PositiveInt.make(300),
+          },
+        });
+        const registered = (yield* engine.getThreadProjection(ownerId)).thread.threadWatches?.[0];
+        assert.equal(registered?.oversight?.ownedDelegate, true);
+        const reactor = yield* ThreadWatchReactor.make;
+        yield* reactor.sweep;
+        const oversightNotices = () =>
+          engine
+            .getThreadProjection(ownerId)
+            .pipe(
+              Effect.map((projection) =>
+                projection.messages.filter(
+                  (message) =>
+                    message.notification?.source.kind === "monitor" &&
+                    message.notification.source.threadWatch?.oversightCheckIn === true,
+                ),
+              ),
+            );
+        assert.equal((yield* oversightNotices()).length, 0);
+
+        const itemBase = {
+          threadId: childId,
+          runId: childRun.id,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          title: null,
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+        } as const;
+
+        // 1. Two non-commentary items stay below the 3-item threshold (no wake).
+        for (const step of [1, 2] as const) {
+          const itemId = TurnItemId.make(`oversight-step-${step}`);
+          yield* sink.write({
+            commandId: CommandId.make(`oversight-step-${step}`),
+            events: [
+              {
+                id: EventId.make(`oversight-step-${step}`),
+                type: "turn-item.updated",
+                threadId: childId,
+                runId: childRun.id,
+                occurredAt: now,
+                payload: {
+                  ...itemBase,
+                  id: itemId,
+                  ordinal: NonNegativeInt.make(step + 1),
+                  type: "command_execution",
+                  status: "completed",
+                  input: `ls step-${step}`,
+                  output: "HUGE RAW OUTPUT",
+                },
+              },
+            ],
+          });
+        }
+        yield* reactor.sweep;
+        assert.equal((yield* oversightNotices()).length, 0);
+
+        // 2. Third step hits item threshold -> wakes with compact outline (no raw stdout).
+        yield* sink.write({
+          commandId: CommandId.make("oversight-step-3"),
+          events: [
+            {
+              id: EventId.make("oversight-step-3"),
+              type: "turn-item.updated",
+              threadId: childId,
+              runId: childRun.id,
+              occurredAt: now,
+              payload: {
+                ...itemBase,
+                id: TurnItemId.make("oversight-step-3"),
+                ordinal: NonNegativeInt.make(4),
+                type: "file_change",
+                status: "completed",
+                fileName: "src/feature.ts",
+                additions: NonNegativeInt.make(10),
+                deletions: NonNegativeInt.make(2),
+                diffStr: "SECRET FULL DIFF",
+              },
+            },
+          ],
+        });
+        yield* reactor.sweep;
+        const afterItems = yield* oversightNotices();
+        assert.equal(afterItems.length, 1);
+        assert.match(afterItems[0]!.text, /3 new steps/);
+        assert.match(afterItems[0]!.text, /src\/feature\.ts \(\+10 -2\)/);
+        assert.notMatch(afterItems[0]!.text, /HUGE RAW OUTPUT|SECRET FULL DIFF/);
+
+        // 3. Mid-turn commentary wakes immediately regardless of item count.
+        yield* sink.write({
+          commandId: CommandId.make("oversight-commentary"),
+          events: [
+            {
+              id: EventId.make("oversight-commentary"),
+              type: "turn-item.updated",
+              threadId: childId,
+              runId: childRun.id,
+              occurredAt: now,
+              payload: {
+                ...itemBase,
+                id: TurnItemId.make("oversight-commentary-item"),
+                ordinal: NonNegativeInt.make(5),
+                type: "assistant_message",
+                phase: "commentary",
+                messageId: MessageId.make("oversight-commentary-msg"),
+                status: "completed",
+                text: "Checking the retry guard because callers depend on idempotency.",
+                streaming: false,
+              },
+            },
+          ],
+        });
+        yield* reactor.sweep;
+        const afterCommentary = yield* oversightNotices();
+        assert.equal(afterCommentary.length, 2);
+        assert.match(afterCommentary[1]!.text, /commentary update/);
+        assert.match(afterCommentary[1]!.text, /callers depend on idempotency/);
+
+        // 4. Time cadence (5 minutes) wakes even with zero new items.
+        yield* TestClock.adjust("5 minutes");
+        yield* reactor.sweep;
+        const afterTime = yield* oversightNotices();
+        assert.equal(afterTime.length, 3);
+        assert.match(afterTime[2]!.text, /5m elapsed/);
+
+        // 5. Owned delegate completion ends the oversight watch silently without duplicating wakes.
+        const finishedAt = yield* DateTime.now;
+        yield* sink.write({
+          commandId: CommandId.make("oversight-child-complete"),
+          events: [
+            {
+              id: EventId.make("oversight-child-complete"),
+              type: "run.updated",
+              threadId: childId,
+              runId: childRun.id,
+              occurredAt: finishedAt,
+              payload: { ...childRun, status: "completed", completedAt: finishedAt },
+            },
+          ],
+        });
+        yield* reactor.sweep;
+        assert.equal(
+          (yield* engine.getThreadProjection(ownerId)).thread.threadWatches?.[0]?.ended,
+          true,
+        );
+        const allMonitorNotices = (yield* engine.getThreadProjection(ownerId)).messages.filter(
+          (message) => message.notification?.source.kind === "monitor",
+        );
+        assert.equal(allMonitorNotices.length, 3);
       }),
   );
 

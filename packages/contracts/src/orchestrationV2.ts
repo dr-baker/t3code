@@ -479,6 +479,31 @@ export const THREAD_WATCH_LIMITS = {
   causalHops: 20,
 } as const;
 
+export const THREAD_WATCH_OVERSIGHT_DEFAULTS = {
+  everyItems: 20,
+  everySeconds: 300,
+  minEveryItems: 1,
+  maxEveryItems: 100,
+  minEverySeconds: 30,
+  maxEverySeconds: 3_600,
+  inlineOutlineMaxItems: 24,
+  inlineOutlineMaxChars: 4_000,
+  quietAckToken: "[watch:ok]",
+} as const;
+
+export const ThreadWatchOversight = Schema.Struct({
+  everyItems: PositiveInt.check(
+    Schema.isLessThanOrEqualTo(THREAD_WATCH_OVERSIGHT_DEFAULTS.maxEveryItems),
+  ),
+  everySeconds: PositiveInt.check(
+    Schema.isGreaterThanOrEqualTo(THREAD_WATCH_OVERSIGHT_DEFAULTS.minEverySeconds),
+    Schema.isLessThanOrEqualTo(THREAD_WATCH_OVERSIGHT_DEFAULTS.maxEverySeconds),
+  ),
+  /** Suppresses redundant completion/question wakes when watching an owned delegate child. */
+  ownedDelegate: Schema.optional(Schema.Boolean),
+});
+export type ThreadWatchOversight = typeof ThreadWatchOversight.Type;
+
 export const ThreadWatch = Schema.Struct({
   until: Schema.Literals(["turn", "settled"]),
   id: CommandId,
@@ -486,6 +511,7 @@ export const ThreadWatch = Schema.Struct({
   title: TrimmedNonEmptyString,
   ended: Schema.Boolean,
   workPending: Schema.optional(Schema.Boolean),
+  oversight: Schema.optional(ThreadWatchOversight),
   progress: Schema.optional(
     Schema.Struct({
       cursor: NonNegativeInt,
@@ -493,6 +519,8 @@ export const ThreadWatch = Schema.Struct({
         Schema.isMaxLength(THREAD_WATCH_LIMITS.reportedChanges),
       ),
       baselinePending: Schema.Boolean,
+      lastOutlinePosition: Schema.optional(NonNegativeInt),
+      lastCheckInAtMs: Schema.optional(NonNegativeInt),
     }),
   ),
 });
@@ -504,6 +532,7 @@ const ThreadWatchStamp = Schema.Struct({
   causalThreadIds: Schema.optional(
     Schema.Array(ThreadId).check(Schema.isMaxLength(THREAD_WATCH_LIMITS.causalHops)),
   ),
+  oversightCheckIn: Schema.optional(Schema.Boolean),
 });
 
 export const OrchestrationV2AppThread = Schema.Struct({
@@ -2422,13 +2451,14 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   threadWatches: Schema.optional(
     Schema.Array(
-      ThreadWatch.mapFields(({ id, threadId, title, ended, until, workPending }) => ({
+      ThreadWatch.mapFields(({ id, threadId, title, ended, until, workPending, oversight }) => ({
         id,
         threadId,
         title,
         ended,
         until,
         workPending,
+        oversight,
       })),
     ).check(Schema.isMaxLength(THREAD_WATCH_LIMITS.registrations)),
   ),
@@ -3563,6 +3593,7 @@ export const OrchestrationV2Command = Schema.Union([
     targetThreadId: ThreadId,
     watching: Schema.Boolean,
     until: Schema.optional(Schema.Literals(["turn", "settled"])),
+    oversight: Schema.optional(ThreadWatchOversight),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.watch"),
@@ -3946,6 +3977,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
         text: Schema.String,
         notification: OrchestrationV2Notification,
         causalThreadIds: ThreadWatchStamp.fields.causalThreadIds,
+        oversightCheckIn: Schema.optional(Schema.Boolean),
       }),
     ),
   }),

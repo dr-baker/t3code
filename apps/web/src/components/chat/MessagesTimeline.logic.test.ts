@@ -1,6 +1,7 @@
 import { ThreadId, type WorktreeSetupSnapshot } from "@t3tools/contracts";
 import {
   CheckpointRef,
+  CommandId,
   NodeId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -5160,6 +5161,92 @@ describe("subagent continued by a later turn", () => {
       `turn-fold:${run2}`,
       "closing-2",
     ]);
+  });
+
+  it("folds quiet [watch:ok] oversight check-ins into a single expandable row while keeping user-facing messages visible", () => {
+    const quietRun = RunId.make("run-quiet-oversight");
+    const loudRun = RunId.make("run-loud-oversight");
+    const watchStamp = {
+      id: CommandId.make("watch-1"),
+      threadId: ThreadId.make("child-astra"),
+      oversightCheckIn: true,
+    };
+    const oversightItems: ReadonlyArray<OrchestrationV2TurnItem> = [
+      {
+        ...base("notif-quiet", quietRun, 1_000_001, 1),
+        type: "notification",
+        source: { kind: "monitor", threadWatch: watchStamp },
+        outcome: "updated",
+        summary: "Astra Worker (20 new steps)",
+        detail: "Oversight check-in...",
+      },
+      reasoning("reasoning-quiet", quietRun, 1_000_002, 2),
+      {
+        ...assistant("reply-quiet", quietRun, 1_000_003, 3),
+        text: "[watch:ok] Exploring auth middleware, looks solid.",
+      },
+      {
+        ...base("notif-loud", loudRun, 2_000_001, 10),
+        type: "notification",
+        source: { kind: "monitor", threadWatch: watchStamp },
+        outcome: "updated",
+        summary: "Astra Worker (commentary update)",
+        detail: "Oversight check-in...",
+      },
+      {
+        ...assistant("reply-loud", loudRun, 2_000_002, 11),
+        text: "Astra hit a product tradeoff on auth scope — how should it proceed?",
+      },
+    ];
+    const timelineEntries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: oversightItems.map((item) => ({
+        position: item.ordinal,
+        visibility: "local",
+        sourceThreadId: threadId,
+        sourceItemId: item.id,
+        item,
+      })),
+      optimisticMessages: [],
+    });
+
+    const collapsed = deriveMessagesTimelineRows({
+      timelineEntries,
+      latestRun: {
+        runId: loudRun,
+        status: "completed",
+        startedAt: DateTime.formatIso(at(10)),
+        completedAt: DateTime.formatIso(at(11)),
+      },
+      isWorking: false,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+    expect(collapsed.map((row) => row.id)).toEqual([
+      `turn-fold:${quietRun}`,
+      "notif-loud",
+      "reply-loud",
+    ]);
+    const foldRow = collapsed[0];
+    expect(foldRow?.kind).toBe("turn-fold");
+    if (foldRow?.kind === "turn-fold") {
+      expect(foldRow.label).toBe("Checked in · Exploring auth middleware, looks solid.");
+    }
+
+    const expanded = deriveMessagesTimelineRows({
+      timelineEntries,
+      expandedRunIds: new Set([quietRun]),
+      latestRun: {
+        runId: loudRun,
+        status: "completed",
+        startedAt: DateTime.formatIso(at(10)),
+        completedAt: DateTime.formatIso(at(11)),
+      },
+      isWorking: false,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+    expect(expanded.map((row) => row.id)).toContain("notif-quiet");
+    expect(expanded.map((row) => row.id)).toContain("reply-quiet");
   });
 });
 
