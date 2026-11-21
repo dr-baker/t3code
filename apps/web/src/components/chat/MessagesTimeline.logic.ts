@@ -11,6 +11,10 @@ import * as Equal from "effect/Equal";
 import { shallow } from "zustand/vanilla/shallow";
 import { claudeResumeCompactionAge } from "@t3tools/shared/claudeCompaction";
 import {
+  formatQuietWatchCheckInLabel,
+  parseQuietWatchCheckIn,
+} from "@t3tools/shared/threadWatchOversight";
+import {
   IDLE_COMPACTING_LABELS,
   IDLE_COMPACTION_TITLES,
 } from "@t3tools/client-runtime/user-message";
@@ -1079,6 +1083,18 @@ function itemizedFailedRunIds(
   );
 }
 
+function timelineEntryOversightNotification(
+  entry: TimelineEntry,
+): Extract<TimelineEntry, { kind: "work" }> | null {
+  if (entry.kind !== "work" || entry.entry.itemType !== "notification") return null;
+  const item = entry.entry.projectedItem?.item;
+  return item?.type === "notification" &&
+    item.source.kind === "monitor" &&
+    item.source.threadWatch?.oversightCheckIn === true
+    ? entry
+    : null;
+}
+
 function deriveTurnFolds(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   terminalAssistantMessageIds: ReadonlySet<string>;
@@ -1088,6 +1104,7 @@ function deriveTurnFolds(input: {
   liveSubagentEntryIds: ReadonlySet<string>;
   retainedAssistantReplyEntryIds: ReadonlySet<string>;
   resolve: MessageResolver;
+  quietOversightOnly?: boolean;
 }): ReadonlyMap<string, TurnFold> {
   const interruptedRunIds = new Set<RunId>();
   const promptIndexByRunId = new Map<RunId, number>();
@@ -1113,6 +1130,7 @@ function deriveTurnFolds(input: {
     // Entry timestamps omit startup and can collapse steered turns to an instant.
     startBoundary: string | null;
     anchorEntryId: string;
+    oversightNotification: Extract<TimelineEntry, { kind: "work" }> | null;
     /**
      * Each steer after the turn has produced output starts a new segment at
      * this index into `entries`, so the steer sits between the work it split.
@@ -1125,12 +1143,20 @@ function deriveTurnFolds(input: {
   // Key runless responses per prompt to prevent V2 runs unfolding imported turns.
   let runlessKey: RunId | null = null;
   let responseKey: RunId | null = null;
-  let pendingBoundary: { createdAt: string; anchorEntryId: string } | null = null;
+  let pendingBoundary: {
+    createdAt: string;
+    anchorEntryId: string;
+    oversightNotification: Extract<TimelineEntry, { kind: "work" }> | null;
+  } | null = null;
   for (const [index, entry] of input.timelineEntries.entries()) {
     if (timelineEntryStartsResponse(entry)) {
       const nextEntry = input.timelineEntries[index + 1];
       pendingBoundary = nextEntry
-        ? { createdAt: entry.createdAt, anchorEntryId: nextEntry.id }
+        ? {
+            createdAt: entry.createdAt,
+            anchorEntryId: nextEntry.id,
+            oversightNotification: timelineEntryOversightNotification(entry),
+          }
         : null;
       const boundaryRunId = responseBoundaryRunId(entry);
       runlessKey = boundaryRunId == null ? RunId.make(`runless:${entry.id}`) : null;
@@ -1169,6 +1195,7 @@ function deriveTurnFolds(input: {
         hasStreamingMessage: false,
         startBoundary: pendingBoundary?.createdAt ?? null,
         anchorEntryId: pendingBoundary?.anchorEntryId ?? entry.id,
+        oversightNotification: pendingBoundary?.oversightNotification ?? null,
         steerSegments: [],
       };
       pendingBoundary = null;
@@ -1196,6 +1223,43 @@ function deriveTurnFolds(input: {
       continue;
     }
     if (group.hasStreamingMessage) {
+      continue;
+    }
+    if (
+      group.oversightNotification !== null &&
+      group.steerSegments.length === 0 &&
+      group.terminalEntry !== null &&
+      !group.entries.some(
+        (entry) =>
+          input.liveSubagentEntryIds.has(entry.id) ||
+          timelineEntryIsPersistentResourceCard(entry) ||
+          (entry.kind === "work" &&
+            (entry.entry.questionAnswer !== undefined ||
+              workEntryDisplayIndicatesToolFailure(entry.entry))),
+      )
+    ) {
+      const quietCheckIn = parseQuietWatchCheckIn(group.terminalEntry.message.text);
+      if (quietCheckIn !== null) {
+        const foldedIds = new Set<string>([
+          group.oversightNotification.id,
+          ...group.entries.map((entry) => entry.id),
+        ]);
+        const summary =
+          group.oversightNotification.entry.projectedItem?.item.type === "notification"
+            ? group.oversightNotification.entry.projectedItem.item.summary
+            : null;
+        foldsByAnchorEntryId.set(group.oversightNotification.id, {
+          runId,
+          anchorEntryId: group.oversightNotification.id,
+          createdAt: group.oversightNotification.createdAt,
+          hiddenEntryIds: foldedIds,
+          entryIds: foldedIds,
+          label: formatQuietWatchCheckInLabel({ note: quietCheckIn.note, summary }),
+        });
+        continue;
+      }
+    }
+    if (input.quietOversightOnly) {
       continue;
     }
     const hiddenEntryIds = new Set<string>();
@@ -1690,19 +1754,17 @@ export function deriveMessagesTimelineRows(
     isWorking: input.isWorking,
   });
   const runlessWorkActive = input.isWorking && input.runlessWorkActive === true;
-  const foldsByAnchorEntryId =
-    input.toolCallVisibility === "zen"
-      ? new Map<string, TurnFold>()
-      : deriveTurnFolds({
-          timelineEntries: timelineEntries,
-          terminalAssistantMessageIds,
-          latestRun: input.latestRun ?? null,
-          unfoldedRunIds: new Set([...activeVisualResponseRunIds, ...failedRunIds]),
-          runlessWorkActive,
-          liveSubagentEntryIds,
-          retainedAssistantReplyEntryIds: retainedAssistantReplyIds,
-          resolve,
-        });
+  const foldsByAnchorEntryId = deriveTurnFolds({
+    timelineEntries: timelineEntries,
+    terminalAssistantMessageIds,
+    latestRun: input.latestRun ?? null,
+    unfoldedRunIds: new Set([...activeVisualResponseRunIds, ...failedRunIds]),
+    runlessWorkActive,
+    liveSubagentEntryIds,
+    retainedAssistantReplyEntryIds: retainedAssistantReplyIds,
+    resolve,
+    quietOversightOnly: input.toolCallVisibility === "zen",
+  });
   const timelineEntryById = new Map(timelineEntries.map((entry) => [entry.id, entry]));
   const collapsedEntryIds = new Set<string>();
   const collapsedFoldMemberIds = new Set<string>();

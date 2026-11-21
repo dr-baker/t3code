@@ -6,6 +6,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { formatWatchOversightCadence } from "@t3tools/shared/threadWatchOversight";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { IconButton } from "../../components/ui/IconButton";
@@ -58,7 +59,11 @@ export function ThreadWatches(props: {
               {item.title}
             </Text>
             <Text className="text-xs text-foreground-muted">
-              {item.ended ? "Ended" : "Watching"}
+              {item.ended
+                ? "Ended"
+                : item.oversight
+                  ? formatWatchOversightCadence(item.oversight)
+                  : "Watching"}
             </Text>
           </Pressable>
           <IconButton

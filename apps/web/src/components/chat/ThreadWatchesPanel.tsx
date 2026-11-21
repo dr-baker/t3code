@@ -1,5 +1,6 @@
 import { AuthOrchestrationOperateScope, ThreadId, type EnvironmentId } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { formatWatchOversightCadence } from "@t3tools/shared/threadWatchOversight";
 import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { useId, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
@@ -79,7 +80,13 @@ export function ThreadWatchesPanel(props: {
                 <TooltipPopup>{item.title}</TooltipPopup>
               </Tooltip>
             </div>
-            {item.ended ? <span className="text-xs text-muted-foreground">Ended</span> : null}
+            {item.ended ? (
+              <span className="text-xs text-muted-foreground">Ended</span>
+            ) : item.oversight ? (
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {formatWatchOversightCadence(item.oversight)}
+              </span>
+            ) : null}
             <Button
               size="icon-xs"
               variant="ghost"
