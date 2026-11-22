@@ -15,6 +15,7 @@ import {
 } from "@t3tools/contracts";
 import { formatModelSlugName } from "@t3tools/shared/model";
 import { Atom } from "effect/reactivity";
+import { T, useGT, Var } from "gt-react";
 import { ChevronRightIcon, PenLineIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
@@ -38,6 +39,7 @@ import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { workEntryDisplayLabel } from "./MessagesTimeline.logic";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
@@ -161,7 +163,9 @@ function RewriteAttachment({
 function RewriteWaitingSkeleton() {
   return (
     <div role="status" className="space-y-2.5 py-1">
-      <span className="sr-only">Waiting for the answer…</span>
+      <span className="sr-only">
+        <T>Waiting for the answer…</T>
+      </span>
       <Skeleton shape="pill" className="h-2.5 w-4/5" />
       <Skeleton shape="pill" className="h-2.5 w-full" />
       <Skeleton shape="pill" className="h-2.5 w-3/5" />
@@ -180,6 +184,7 @@ export function RewriteOutput({
   showActivity?: boolean;
   actions?: ReactNode;
 }) {
+  const gt = useGT();
   const config = useAtomValue(serverEnvironment.configValueAtom(threadRef.environmentId));
   const projection = useQuietThreadProjection(threadRef)?.projection;
   const project = useProject(
@@ -272,8 +277,12 @@ export function RewriteOutput({
         <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
           <RewriteProviderIcon display={attributionDisplay} className="size-3.5" />
           <span className="truncate">
-            Rewritten by{" "}
-            <span className="font-medium text-foreground/85">{attributionDisplay.inlineLabel}</span>
+            <T>
+              Rewritten by{" "}
+              <span className="font-medium text-foreground/85">
+                <Var>{attributionDisplay.inlineLabel}</Var>
+              </span>
+            </T>
           </span>
         </div>
       )}
@@ -293,7 +302,11 @@ export function RewriteOutput({
                 activityOpen && "rotate-90",
               )}
             />
-            <span className="tabular-nums">Activity ({activity.length})</span>
+            <span className="tabular-nums">
+              <T>
+                Activity (<Var>{activity.length}</Var>)
+              </T>
+            </span>
           </button>
           {activityOpen && (
             <div className="mt-1.5 ms-1.5 max-h-48 overflow-y-auto border-s border-border/60 ps-3">
@@ -313,12 +326,12 @@ export function RewriteOutput({
         (isTerminalRun ? (
           <p role="status" className="text-sm text-muted-foreground">
             {run?.status === "failed"
-              ? "This rewrite failed."
+              ? gt("This rewrite failed.")
               : run?.status === "interrupted" ||
                   run?.status === "cancelled" ||
                   run?.status === "rolled_back"
-                ? "This rewrite was interrupted."
-                : "This answer has no visible output."}
+                ? gt("This rewrite was interrupted.")
+                : gt("This answer has no visible output.")}
           </p>
         ) : (
           <RewriteWaitingSkeleton />
@@ -326,7 +339,11 @@ export function RewriteOutput({
       {((attribution && text.length > 0) || actions) && (
         <div className="flex items-center gap-1.5 pt-0.5">
           {attribution && text.length > 0 && (
-            <MessageCopyButton text={text.join("\n\n")} label="Copy rewrite" variant="ghost" />
+            <MessageCopyButton
+              text={text.join("\n\n")}
+              label={gt("Copy rewrite")}
+              variant="ghost"
+            />
           )}
           {actions}
         </div>
@@ -336,6 +353,7 @@ export function RewriteOutput({
 }
 
 export function EarlierRewriteHistory({ threadRef }: Pick<AnswerRef, "threadRef">) {
+  const gt = useGT();
   const history = useThreadHistory(threadRef);
   const loadEarlier = useAtomCommand(threadEnvironment.loadEarlierHistory);
   return (
@@ -352,7 +370,7 @@ export function EarlierRewriteHistory({ threadRef }: Pick<AnswerRef, "threadRef"
             })
           }
         >
-          {history.loading ? "Loading earlier output…" : "Load earlier output"}
+          {history.loading ? gt("Loading earlier output…") : gt("Load earlier output")}
         </Button>
       )}
       {history.error && <p role="status">{history.error}</p>}
@@ -416,28 +434,37 @@ export function RewriteButton({
   runId,
   group,
 }: AnswerRef & { group?: RewriteGroup | undefined }) {
+  const gt = useGT();
   const { canOperate, submit } = useRewriteCommand({ threadRef, runId }, !!group);
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(threadRef.environmentId));
   const isPanelActive = useRightPanelStore((state) => {
     const panel = selectThreadRightPanelState(state.byThreadKey, threadRef);
     return panel.isOpen && panel.activeSurfaceId === `rewrites:${runId}`;
   });
+  const candidateCount = group?.candidates.length ?? 0;
+  const label =
+    candidateCount > 0 ? gt("Rewrites ({count})", { count: candidateCount }) : gt("Rewrites");
   return (
-    <Button
-      size="xs"
-      variant="ghost-muted"
-      data-pressed={isPanelActive ? "" : undefined}
-      disabled={!group && (!canOperate || !settings)}
-      onClick={() => {
-        useRightPanelStore.getState().openRewrites(threadRef, runId);
-        if (!group && settings?.rewriteCouncil.length) void submit();
-      }}
-    >
-      <PenLineIcon className="size-3" />
-      Rewrites
-      {group && group.candidates.length > 0 ? (
-        <span className="tabular-nums opacity-70">{group.candidates.length}</span>
-      ) : null}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost-muted"
+            aria-label={label}
+            data-pressed={isPanelActive ? "" : undefined}
+            disabled={!group && (!canOperate || !settings)}
+            onClick={() => {
+              useRightPanelStore.getState().openRewrites(threadRef, runId);
+              if (!group && settings?.rewriteCouncil.length) void submit();
+            }}
+          />
+        }
+      >
+        <PenLineIcon aria-hidden="true" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{label}</TooltipPopup>
+    </Tooltip>
   );
 }

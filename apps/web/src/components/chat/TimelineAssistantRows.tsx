@@ -27,6 +27,7 @@ import {
   useProject,
   useQuietThreadShell,
 } from "../../state/entities";
+import { RewriteButton } from "./Rewrites";
 import { TurnCostButton } from "./TurnCostButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantCitationSource } from "./AssistantCitationSource";
@@ -269,6 +270,16 @@ function AssistantMessageMeta({
             threadId: projectedItem?.sourceThreadId ?? ctx.threadRef.threadId,
           }}
           runId={message.runId}
+        />
+      ) : null}
+      {!message.streaming &&
+      message.runId &&
+      ctx.threadRef &&
+      ctx.rewritableRuns.has(message.runId) ? (
+        <RewriteButton
+          threadRef={ctx.threadRef}
+          runId={message.runId}
+          group={ctx.rewritableRuns.get(message.runId)}
         />
       ) : null}
       {!message.streaming && (

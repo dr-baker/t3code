@@ -784,6 +784,25 @@ const ConversationTimeline = memo(function ConversationTimeline({
         )
       : EMPTY_REWRITE_CANDIDATES,
   );
+  const rewritableRuns = new Map<RunId, OrchestrationV2Run["rewrites"]>(
+    rewritesEnabled
+      ? runsProp
+          .filter((run) => run.status === "completed" || run.status === "waiting")
+          .map((run) => [run.id, run.rewrites])
+      : [],
+  );
+  const runsWithAssistantMeta = new Set<RunId>(
+    stableRows.flatMap((row) =>
+      row.kind === "assistant-meta" && row.message.runId
+        ? [row.message.runId]
+        : row.kind === "message" &&
+            row.message.role === "assistant" &&
+            row.showAssistantMeta &&
+            row.message.runId
+          ? [row.message.runId]
+          : [],
+    ),
+  );
   const rows = (() => {
     if (!rewritesEnabled) return stableRows;
     const outputRunIds = new Map(
@@ -823,7 +842,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
         group,
         selected,
       }),
-    });
+    }).filter(
+      (row) => !(row.kind === "rewrite" && !row.selected && runsWithAssistantMeta.has(row.runId)),
+    );
   })();
   const matchedApprovalRequestIds = new Set<string>();
   for (const row of pendingApprovalRequestIds.size > 0 ? rows : []) {
@@ -1183,6 +1204,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     workspaceRoot,
     skills,
     runs,
+    rewritableRuns,
     activeThreadEnvironmentId,
     onRevertToTurnCount,
     onRunShellCommand,
