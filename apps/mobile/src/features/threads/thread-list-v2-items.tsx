@@ -236,13 +236,14 @@ const LEGACY_MENU_ACTIONS: MenuAction[] = [
 function ThreadListV2Section(props: {
   readonly label: string;
   readonly pane?: "screen" | "sidebar";
+  readonly className?: string;
   readonly tone?: "default" | "snoozed";
   readonly disclosure?: {
     readonly expanded: boolean;
     readonly disabled?: boolean;
     readonly onToggle: () => void;
     readonly accessibilityLabel: string;
-    readonly accessibilityHint: string;
+    readonly accessibilityHint?: string;
   };
 }) {
   const snoozed = props.tone === "snoozed";
@@ -250,6 +251,7 @@ function ThreadListV2Section(props: {
   const className = cn(
     "mb-1.5 mt-4 flex-row items-center gap-2.5",
     props.pane === "sidebar" ? "px-3" : "px-5",
+    props.className,
   );
   const content = (
     <>
@@ -373,6 +375,28 @@ export const ThreadListV2WorkingShelfHeader = memo(function ThreadListV2WorkingS
   props: ThreadListV2ShelfHeaderProps,
 ) {
   return <ThreadListV2ShelfHeader {...props} kind="working" />;
+});
+
+export const ThreadListV2PinnedShelfHeader = memo(function ThreadListV2PinnedShelfHeader(
+  props: ThreadListV2ShelfHeaderProps,
+) {
+  const gt = useGT();
+  const m = useMessages();
+  const label = m(msg("Pinned", { $context: "thread list section" }));
+  const countedLabel = gt("{label} ({count})", { label, count: props.count });
+  return (
+    <ThreadListV2Section
+      label={props.expanded ? label : countedLabel}
+      pane={props.pane}
+      className="min-h-[44px] android:min-h-[48px]"
+      disclosure={{
+        expanded: props.expanded,
+        disabled: props.disabled,
+        onToggle: props.onToggle,
+        accessibilityLabel: countedLabel,
+      }}
+    />
+  );
 });
 
 export const ThreadListV2SnoozedShelfHeader = memo(function ThreadListV2SnoozedShelfHeader(

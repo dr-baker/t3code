@@ -386,6 +386,60 @@ describe("getThreadListV2OrderedSection", () => {
 });
 
 describe("buildThreadListV2Items", () => {
+  it("shows a pin with an unread answer once in Active and restores its shelf position after a visit", () => {
+    const completed = presentThreadShell(
+      environmentId,
+      makeRawThreadShell({
+        latestRunId: RunId.make("run-complete"),
+        status: "completed",
+        latestRunCompletedAt: DateTime.makeUnsafe(NOW),
+        lastVisitedAt: DateTime.makeUnsafe("2026-06-01T23:59:00.000Z"),
+      }),
+    );
+    const pin = {
+      ...completed,
+      id: ThreadId.make("needs-input"),
+      title: "Needs input",
+      pinnedAt: NOW,
+      pinOrderKey: "a",
+    };
+    const threads = [
+      makeThread({ id: ThreadId.make("active"), title: "Active" }),
+      pin,
+      ...["b", "c", "d"].map((key) =>
+        makeThread({ id: ThreadId.make(key), title: key, pinnedAt: NOW, pinOrderKey: key }),
+      ),
+    ];
+    const build = (updatedThreads: typeof threads, expanded = false, searchQuery = "") =>
+      buildThreadListV2Items({
+        threads: updatedThreads,
+        environmentId: null,
+        searchQuery,
+        now: NOW,
+        pinnedShelfExpanded: expanded,
+      });
+    const ids = (layout: ReturnType<typeof build>) => layout.items.map((row) => row.thread.id);
+    const attention = build(threads);
+    expect(attention.pinnedShelf).toEqual({ index: 2, count: 3 });
+    expect(ids(attention)).toEqual(["needs-input", "active", "b", "c"]);
+    expect(attention.items[0]?.pinned).toBe(true);
+    expect(
+      buildThreadListV2ListItems({ ...attention, pendingTasks: [] }).map((item) => item.key),
+    ).toEqual([
+      "v2-thread:environment-1:needs-input",
+      "v2-thread:environment-1:active",
+      "v2-pinned-shelf",
+      "v2-thread:environment-1:b",
+      "v2-thread:environment-1:c",
+    ]);
+    const acknowledged = threads.map((thread) =>
+      thread === pin ? { ...pin, lastVisitedAt: NOW } : thread,
+    );
+    expect(ids(build(acknowledged))).toEqual(["active", "needs-input", "b"]);
+    expect(ids(build(acknowledged, true))).toEqual(["active", "needs-input", "b", "c", "d"]);
+    expect(ids(build(acknowledged, false, "d"))).toContain("d");
+  });
+
   it("hides snoozed threads and counts them — visibility parity with web", () => {
     const layout = buildThreadListV2Items({
       threads: [

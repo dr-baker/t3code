@@ -94,6 +94,10 @@ settlement leaves pinned threads alone. Settling a thread removes its pin; snooz
 to Snoozed until it wakes. Turn off **Settings → General → Sidebar → Pop out ready pins**
 to keep pins in the drawer when they need attention; their status badges still show it.
 
+On mobile, tap **Pinned** to expand or collapse the shelf below the main thread list.
+The collapsed shelf previews two pins. Pins that need attention surface in the main list
+and return to their saved position when handled.
+
 On web and desktop, drag a thread between sections to change its state. Drag a thread into
 the pinned section to pin it at the spot you drop it; drag a resting pin into the active
 list to unpin it. Reordering a pinned thread that surfaced in Active keeps its saved pin.

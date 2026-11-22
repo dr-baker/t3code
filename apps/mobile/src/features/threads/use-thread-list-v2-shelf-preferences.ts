@@ -8,6 +8,8 @@ export function useThreadListV2ShelfPreferences() {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomCommand(saveMobilePreferences);
   const loaded = AsyncResult.isSuccess(preferencesResult);
+  const pinnedShelfExpanded =
+    loaded && preferencesResult.value.threadListPinnedShelfExpanded === true;
   const snoozedShelfExpanded =
     loaded && preferencesResult.value.threadListSnoozedShelfExpanded === true;
   const settledShelfExpanded =
@@ -17,6 +19,14 @@ export function useThreadListV2ShelfPreferences() {
     loaded && preferencesResult.value.threadListWorkingShelfExpanded === true;
 
   // Transforms read optimistic state so same-frame presses toggle twice.
+  const togglePinnedShelf = () => {
+    if (!loaded) return;
+    void savePreferences({
+      transform: (current) => ({
+        threadListPinnedShelfExpanded: current.threadListPinnedShelfExpanded !== true,
+      }),
+    });
+  };
   const toggleSnoozedShelf = () => {
     if (!loaded) return;
     void savePreferences({
@@ -44,11 +54,13 @@ export function useThreadListV2ShelfPreferences() {
 
   return {
     loaded,
+    pinnedShelfExpanded,
     settledShelfExpanded,
     snoozedShelfExpanded,
     workingShelfEnabled,
     workingShelfExpanded,
     toggleSettledShelf,
+    togglePinnedShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
   } as const;
