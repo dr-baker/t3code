@@ -245,6 +245,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   mic: IconMicrophone,
   paintbrush: IconPalette,
   pencil: IconPencil,
+  "pencil.line": IconPencil,
   "person.crop.circle": IconUserCircle,
   "person.2": IconUsers,
   "person.fill.checkmark": IconUserCheck,

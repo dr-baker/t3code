@@ -240,11 +240,20 @@ export function placeRewriteControls<Row>(input: {
   );
   if (!runs.size) return input.rows;
   const anchors = new Map<RunId, number>();
+  const runsWithAnswer = new Set<RunId>();
   const descriptions = input.rows.map((row, index) => {
     const description = input.describe(row);
-    if (description.runId && runs.has(description.runId)) anchors.set(description.runId, index);
+    if (description.runId && runs.has(description.runId)) {
+      anchors.set(description.runId, index);
+      if (description.answer) runsWithAnswer.add(description.runId);
+    }
     return description;
   });
+  for (const runId of anchors.keys()) {
+    if (!runsWithAnswer.has(runId) && runs.get(runId) === undefined) {
+      anchors.delete(runId);
+    }
+  }
   return input.rows.flatMap((row, index) => {
     const { runId, answer } = descriptions[index]!;
     if (!runId || !anchors.has(runId)) return [row];

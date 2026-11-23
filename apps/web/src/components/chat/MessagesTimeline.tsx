@@ -41,6 +41,7 @@ const EMPTY_RESPONDING_REQUEST_IDS: TimelineRowSharedState["respondingRequestIds
 const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
 
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
+import { parseQuietWatchCheckIn } from "@t3tools/shared/threadWatchOversight";
 import { observeVisibleAnimation } from "../../lib/visibleAnimation";
 import {
   memo,
@@ -784,12 +785,26 @@ const ConversationTimeline = memo(function ConversationTimeline({
         )
       : EMPTY_REWRITE_CANDIDATES,
   );
+  const quietWatchCheckInRunIds = new Set<RunId>();
+  for (const row of stableRows) {
+    if (
+      row.kind === "message" &&
+      row.message.role === "assistant" &&
+      row.message.runId &&
+      parseQuietWatchCheckIn(row.message.text) !== null
+    ) {
+      quietWatchCheckInRunIds.add(row.message.runId);
+    }
+  }
+  const eligibleRewriteRuns = rewritesEnabled
+    ? runsProp.filter(
+        (run) =>
+          (run.status === "completed" || run.status === "waiting") &&
+          (run.rewrites !== undefined || !quietWatchCheckInRunIds.has(run.id)),
+      )
+    : [];
   const rewritableRuns = new Map<RunId, OrchestrationV2Run["rewrites"]>(
-    rewritesEnabled
-      ? runsProp
-          .filter((run) => run.status === "completed" || run.status === "waiting")
-          .map((run) => [run.id, run.rewrites])
-      : [],
+    eligibleRewriteRuns.map((run) => [run.id, run.rewrites]),
   );
   const runsWithAssistantMeta = new Set<RunId>(
     stableRows.flatMap((row) =>
@@ -821,7 +836,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     );
     return placeRewriteControls<MessagesTimelineRow>({
       rows: stableRows,
-      runs: runsProp,
+      runs: eligibleRewriteRuns,
       availableCandidates: availableRewriteCandidates,
       describe: (row) => {
         if (row.kind === "message" || row.kind === "assistant-meta") {

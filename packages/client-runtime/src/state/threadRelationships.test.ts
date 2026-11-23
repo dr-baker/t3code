@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ThreadId } from "@t3tools/contracts";
+import { ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 import {
   deriveThreadRelationshipGraph,
   immediateThreadRelationships,
   orderWebThreadLineageRows,
+  placeRewriteControls,
   resolveMergeBackTargetThreadId,
   threadRelationshipRowStatus,
 } from "./threadRelationships.ts";
@@ -444,5 +445,58 @@ describe("web thread lineage ordering", () => {
         },
       }),
     ).toEqual([dated, missingTransfer, undated]);
+  });
+});
+
+describe("placeRewriteControls", () => {
+  it("omits rewrite controls for completed runs without visible answer rows unless rewrites already exist", () => {
+    const foldedWatchRun = RunId.make("watch-fold-run");
+    const answeredRun = RunId.make("answered-run");
+    const existingGroupRun = RunId.make("existing-group-run");
+    const candidateThreadId = ThreadId.make("existing-rewrite-child");
+
+    const rows = [
+      { id: "turn-fold:watch", runId: foldedWatchRun, answer: false },
+      { id: "user:1", runId: answeredRun, answer: false },
+      { id: "assistant:1", runId: answeredRun, answer: true },
+      { id: "turn-fold:existing", runId: existingGroupRun, answer: false },
+    ];
+
+    const placed = placeRewriteControls({
+      rows,
+      runs: [
+        { id: foldedWatchRun, status: "completed" },
+        { id: answeredRun, status: "completed" },
+        {
+          id: existingGroupRun,
+          status: "completed",
+          rewrites: {
+            candidates: [
+              {
+                threadId: candidateThreadId,
+                runId: RunId.make("rewrite-child-run"),
+                modelSelection: {
+                  instanceId: ProviderInstanceId.make("codex"),
+                  model: "gpt-test",
+                },
+              },
+            ],
+            selectedThreadId: null,
+          },
+        },
+      ],
+      availableCandidates: new Set([candidateThreadId]),
+      describe: (row) => row,
+      makeControl: (row, runId) => ({ ...row, id: `rewrite:${runId}`, answer: false }),
+    });
+
+    expect(placed.map((row) => row.id)).toEqual([
+      "turn-fold:watch",
+      "user:1",
+      "assistant:1",
+      `rewrite:${answeredRun}`,
+      "turn-fold:existing",
+      `rewrite:${existingGroupRun}`,
+    ]);
   });
 });

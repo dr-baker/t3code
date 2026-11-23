@@ -10,11 +10,16 @@ import { ListSection } from "../../components/ui/ListSection";
 import { collectMobileAssistantTextSelectors } from "../../lib/assistantCitationSelection";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
-import { MobileRewrites } from "./MobileRewrites";
+import { MobileRewriteButton, MobileRewrites } from "./MobileRewrites";
 import { TurnCostButton } from "./TurnCostButton";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
-import { ASSISTANT_CITATION_MAX_TEXT_LENGTH, type AssistantCitation } from "@t3tools/contracts";
+import {
+  ASSISTANT_CITATION_MAX_TEXT_LENGTH,
+  type AssistantCitation,
+  type OrchestrationV2Run,
+} from "@t3tools/contracts";
+import { parseQuietWatchCheckIn } from "@t3tools/shared/threadWatchOversight";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { useWorkspaceSettledContentWidth } from "../layout/workspace-content-width";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
@@ -1999,6 +2004,7 @@ function renderFeedEntry(
     readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
     readonly workGroupScrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
+    readonly rewritableRuns: ReadonlyMap<RunId, OrchestrationV2Run["rewrites"]>;
     readonly unsettledTurnId: RunId | null;
     readonly compactionLabelsByEntryId: ReadonlyMap<string, { title: string; compacting: string }>;
     readonly failedRunIds: ReadonlySet<RunId>;
@@ -2773,6 +2779,39 @@ function renderFeedEntry(
                 }}
                 runId={message.runId}
                 tintColor={iconSubtleColor}
+              />
+            ) : null}
+            {message.runId && props.rewritableRuns.has(message.runId) ? (
+              <MobileRewriteButton
+                threadRef={{ environmentId: props.environmentId, threadId: props.threadId }}
+                runId={message.runId}
+                group={props.rewritableRuns.get(message.runId)}
+                width={props.markdownContentWidth}
+                iconColor={iconSubtleColor}
+                tintColor={iconSubtleColor}
+                buttonSize={props.replyActionSize.button}
+                iconSize={props.replyActionSize.icon}
+                renderAttachments={(files) => (
+                  <MessageAttachmentList
+                    attachments={files}
+                    environmentId={props.environmentId}
+                    onPressPreview={props.onPressPreview}
+                    onPlaybackStart={props.onPlaybackStart}
+                  />
+                )}
+                renderText={(text) => (
+                  <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
+                    <AssistantMarkdownContent
+                      markdown={text}
+                      environmentId={props.environmentId}
+                      markdownStyles={markdownStyles.assistant}
+                      linkHandlers={props.markdownLinkHandlers}
+                      onUseArtifactTemplate={props.onUseArtifactTemplate}
+                      renderImage={props.renderMarkdownImage}
+                      skills={props.skills}
+                    />
+                  </MarkdownImageAvailableWidthContext>
+                )}
               />
             ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
@@ -3982,16 +4021,74 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         )
       : EMPTY_REWRITE_CANDIDATES,
   );
-  const rewriteFeed = useMemo(() => {
+  const terminalAssistantMessageIds = useMemo(() => {
+    const terminalIdsByTurn = new Map<RunId, string>();
+    for (const entry of props.feed) {
+      if (entry.type === "message" && entry.message.role === "assistant" && entry.message.runId) {
+        terminalIdsByTurn.set(entry.message.runId, entry.message.id);
+      }
+    }
+    return new Set(terminalIdsByTurn.values());
+  }, [props.feed]);
+  const eligibleRewriteRuns = useMemo(() => {
     if (
       !rewriteParent ||
       rewriteParent.thread.lineage.sideChat ||
       rewriteParent.thread.lineage.relationshipToParent === "subagent" ||
       rewriteParent.thread.delegatedFrom
-    )
-      return feed;
-    return placeThreadFeedRewriteControls(feed, rewriteParent.runs, availableRewriteCandidates);
-  }, [availableRewriteCandidates, feed, rewriteParent]);
+    ) {
+      return [];
+    }
+    const quietWatchCheckInRunIds = new Set<RunId>();
+    for (const entry of feed) {
+      if (
+        entry.type === "message" &&
+        entry.message.role === "assistant" &&
+        entry.message.runId &&
+        parseQuietWatchCheckIn(entry.message.text) !== null
+      ) {
+        quietWatchCheckInRunIds.add(entry.message.runId);
+      }
+    }
+    return rewriteParent.runs.filter(
+      (run) =>
+        (run.status === "completed" || run.status === "waiting") &&
+        (run.rewrites !== undefined || !quietWatchCheckInRunIds.has(run.id)),
+    );
+  }, [feed, rewriteParent]);
+  const rewritableRuns = useMemo(
+    () =>
+      new Map<RunId, OrchestrationV2Run["rewrites"]>(
+        eligibleRewriteRuns.map((run) => [run.id, run.rewrites]),
+      ),
+    [eligibleRewriteRuns],
+  );
+  const runsWithAssistantMeta = useMemo(() => {
+    const ids = new Set<RunId>();
+    for (const entry of feed) {
+      if (
+        entry.type === "message" &&
+        entry.message.role === "assistant" &&
+        entry.message.runId &&
+        terminalAssistantMessageIds.has(entry.message.id) &&
+        !entry.message.streaming
+      ) {
+        ids.add(entry.message.runId);
+      }
+    }
+    return ids;
+  }, [feed, terminalAssistantMessageIds]);
+  const rewriteFeed = useMemo(() => {
+    if (eligibleRewriteRuns.length === 0) return feed;
+    return placeThreadFeedRewriteControls(
+      feed,
+      eligibleRewriteRuns,
+      availableRewriteCandidates,
+    ).filter(
+      (entry) =>
+        !(entry.type === "rewrite" && !entry.selected && runsWithAssistantMeta.has(entry.runId)),
+    );
+  }, [availableRewriteCandidates, eligibleRewriteRuns, feed, runsWithAssistantMeta]);
   const presentedFeed = appendGuestPendingMessages(
     appendPendingTurn(rewriteFeed, { zen: props.toolCallVisibility === "zen" }, m),
     guestShare,
@@ -4074,15 +4171,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     { anchorOffset: anchorTopInset + CHAT_LIST_ANCHOR_OFFSET },
   );
   const failedRunIds = failedFeedRunIds(props.feed, props.latestRun);
-  const terminalAssistantMessageIds = (() => {
-    const terminalIdsByTurn = new Map<RunId, string>();
-    for (const entry of props.feed) {
-      if (entry.type === "message" && entry.message.role === "assistant" && entry.message.runId) {
-        terminalIdsByTurn.set(entry.message.runId, entry.message.id);
-      }
-    }
-    return new Set(terminalIdsByTurn.values());
-  })();
   // An interrupted run unfolds; a run that is no longer latest folds back.
   const [previousLatestRun, setPreviousLatestRun] = useState(props.latestRun);
   if (previousLatestRun !== props.latestRun) {
@@ -4390,6 +4478,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             workRowSizing,
             workGroupScrollPositions,
             terminalAssistantMessageIds,
+            rewritableRuns,
             unsettledTurnId,
             compactionLabelsByEntryId,
             failedRunIds,
