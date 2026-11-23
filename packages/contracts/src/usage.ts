@@ -150,12 +150,45 @@ export const UsageCostEstimate = Schema.Struct({
 });
 export type UsageCostEstimate = typeof UsageCostEstimate.Type;
 
-export const RunCost = Schema.Struct({ runId: RunId, ...UsageCostEstimate.fields });
+export const ThreadCostCategory = Schema.Struct({
+  ...UsageCostEstimate.fields,
+  threadCount: NonNegativeInt,
+});
+export type ThreadCostCategory = typeof ThreadCostCategory.Type;
+
+export const RewriteCandidateCost = Schema.Struct({
+  threadId: ThreadId,
+  ...UsageCostEstimate.fields,
+});
+export type RewriteCandidateCost = typeof RewriteCandidateCost.Type;
+
+export const RunCostBreakdown = Schema.Struct({
+  direct: UsageCostEstimate,
+  rewrites: Schema.optional(ThreadCostCategory),
+  subagents: Schema.optional(ThreadCostCategory),
+  rewriteCandidates: Schema.optional(Schema.Array(RewriteCandidateCost)),
+});
+export type RunCostBreakdown = typeof RunCostBreakdown.Type;
+
+export const RunCost = Schema.Struct({
+  runId: RunId,
+  ...UsageCostEstimate.fields,
+  breakdown: Schema.optional(RunCostBreakdown),
+});
 export type RunCost = typeof RunCost.Type;
+
+export const ThreadCostBreakdown = Schema.Struct({
+  direct: UsageCostEstimate,
+  rewrites: Schema.optional(ThreadCostCategory),
+  sideChats: Schema.optional(ThreadCostCategory),
+  subagents: Schema.optional(ThreadCostCategory),
+});
+export type ThreadCostBreakdown = typeof ThreadCostBreakdown.Type;
 
 export const ThreadCost = Schema.Struct({
   ...UsageCostEstimate.fields,
   runs: Schema.Array(RunCost),
+  breakdown: Schema.optional(ThreadCostBreakdown),
 });
 export type ThreadCost = typeof ThreadCost.Type;
 

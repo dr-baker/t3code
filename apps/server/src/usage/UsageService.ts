@@ -45,7 +45,7 @@ import { canonicalModelFilter, resolveModelAliases, UsageAggregator } from "./us
 import {
   createOverrideRateTable,
   isUnlistedModel,
-  priceThreadUsage,
+  priceThreadCostTree,
   parseRateTable,
   type RateTable,
 } from "./usagePricing.ts";
@@ -1262,22 +1262,20 @@ export const make = Effect.gen(function* () {
   const readThreadCost = Effect.fn("UsageService.readThreadCost")(function* (
     input: ThreadCostInput,
   ) {
-    const records = yield* projections
-      .getThreadRecords(input.threadId, ["runs", "attempts", "providerTurns"])
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new UsageReadError({
-              reason: "scanFailed",
-              detail: "Could not read thread usage.",
-              cause,
-            }),
-        ),
-      );
+    const costTree = yield* projections.getThreadCostTree(input.threadId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new UsageReadError({
+            reason: "scanFailed",
+            detail: "Could not read thread usage.",
+            cause,
+          }),
+      ),
+    );
     const settings = yield* readSettings;
     yield* ensureRates(false);
-    return priceThreadUsage(
-      records,
+    return priceThreadCostTree(
+      costTree,
       rates,
       createOverrideRateTable(settings.usagePriceOverrides),
       resolveModelAliases(settings.usageModelAliases),

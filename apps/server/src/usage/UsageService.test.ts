@@ -4416,3 +4416,279 @@ it.live("prices persisted thread usage without scanning transcripts", () =>
     );
   }),
 );
+
+it.live("rolls up rewrites, side chats, and subagents while excluding ordinary forks", () =>
+  Effect.gen(function* () {
+    const { home, settings } = yield* setup;
+    yield* Effect.gen(function* () {
+      const context = yield* Layer.build(
+        ProjectionStore.layer.pipe(Layer.provideMerge(Sqlite.layerMemory)),
+      );
+      const store = Context.get(context, ProjectionStore.ProjectionStoreV2);
+      const now = yield* DateTime.now;
+      const projectId = ProjectId.make("rollup-project");
+      const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "test-model" };
+
+      const seedThread = (input: {
+        readonly id: ThreadId;
+        readonly parentThreadId: ThreadId | null;
+        readonly relationshipToParent: "fork" | "subagent" | null;
+        readonly rootThreadId: ThreadId;
+        readonly sideChat?: boolean;
+        readonly runId: RunId;
+        readonly rewrites?: {
+          readonly candidates: ReadonlyArray<{
+            readonly threadId: ThreadId;
+            readonly runId: RunId;
+            readonly modelSelection: typeof modelSelection;
+          }>;
+          readonly selectedThreadId: ThreadId | null;
+        };
+        readonly outputTokens: number;
+      }) =>
+        Effect.gen(function* () {
+          const attemptId = RunAttemptId.make(`attempt:${input.id}`);
+          const nodeId = NodeId.make(`node:${input.id}`);
+          const providerThreadId = ProviderThreadId.make(`pt:${input.id}`);
+          yield* store.apply({
+            id: EventId.make(`ev:thread:${input.id}`),
+            type: "thread.created",
+            threadId: input.id,
+            occurredAt: now,
+            payload: {
+              createdBy: "user",
+              creationSource: "web",
+              id: input.id,
+              projectId,
+              title: String(input.id),
+              providerInstanceId: modelSelection.instanceId,
+              modelSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+              activeProviderThreadId: null,
+              lineage: {
+                parentThreadId: input.parentThreadId,
+                relationshipToParent: input.relationshipToParent,
+                rootThreadId: input.rootThreadId,
+                ...(input.sideChat ? { sideChat: true } : {}),
+              },
+              forkedFrom: null,
+              createdAt: now,
+              updatedAt: now,
+              archivedAt: null,
+              settledOverride: null,
+              settledAt: null,
+              lastVisitedAt: null,
+              deletedAt: null,
+            },
+          });
+          yield* store.apply({
+            id: EventId.make(`ev:run:${input.id}`),
+            type: "run.created",
+            threadId: input.id,
+            occurredAt: now,
+            payload: {
+              id: input.runId,
+              threadId: input.id,
+              ordinal: 1,
+              providerInstanceId: modelSelection.instanceId,
+              modelSelection,
+              providerThreadId,
+              userMessageId: MessageId.make(`msg:${input.id}`),
+              rootNodeId: nodeId,
+              activeAttemptId: attemptId,
+              status: "completed",
+              requestedAt: now,
+              startedAt: now,
+              completedAt: now,
+              checkpointId: null,
+              contextHandoffId: null,
+              ...(input.rewrites ? { rewrites: input.rewrites } : {}),
+            },
+          });
+          yield* store.apply({
+            id: EventId.make(`ev:attempt:${input.id}`),
+            type: "run-attempt.created",
+            threadId: input.id,
+            occurredAt: now,
+            payload: {
+              id: attemptId,
+              runId: input.runId,
+              attemptOrdinal: 1,
+              rootNodeId: nodeId,
+              providerInstanceId: modelSelection.instanceId,
+              providerThreadId,
+              providerTurnId: null,
+              reason: "initial",
+              status: "completed",
+              startedAt: now,
+              completedAt: now,
+            },
+          });
+          yield* store.apply({
+            id: EventId.make(`ev:turn:${input.id}`),
+            type: "provider-turn.updated",
+            threadId: input.id,
+            occurredAt: now,
+            payload: {
+              id: ProviderTurnId.make(`turn:${input.id}`),
+              providerThreadId,
+              nodeId,
+              runAttemptId: attemptId,
+              nativeTurnRef: null,
+              ordinal: 1,
+              status: "completed",
+              startedAt: now,
+              completedAt: now,
+              turnTokenUsage: {
+                usageStatus: "complete",
+                usageScope: "main_agent",
+                hasSubagents: false,
+                inputTokens: 0,
+                outputTokens: input.outputTokens,
+              },
+            },
+          });
+        });
+
+      const parentId = ThreadId.make("rollup-parent");
+      const parentRunId = RunId.make("rollup-parent-run");
+      const rewriteId = ThreadId.make("rollup-rewrite");
+      const rewriteRunId = RunId.make("rollup-rewrite-run");
+      const sideChatId = ThreadId.make("rollup-side-chat");
+      const nestedSubagentId = ThreadId.make("rollup-nested-subagent");
+      const directSubagentId = ThreadId.make("rollup-direct-subagent");
+      const ordinaryForkId = ThreadId.make("rollup-ordinary-fork");
+
+      yield* seedThread({
+        id: parentId,
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: parentId,
+        runId: parentRunId,
+        rewrites: {
+          candidates: [{ threadId: rewriteId, runId: rewriteRunId, modelSelection }],
+          selectedThreadId: null,
+        },
+        outputTokens: 100, // $0.50
+      });
+      yield* seedThread({
+        id: rewriteId,
+        parentThreadId: parentId,
+        relationshipToParent: "fork",
+        rootThreadId: parentId,
+        sideChat: true,
+        runId: rewriteRunId,
+        outputTokens: 40, // $0.20
+      });
+      yield* seedThread({
+        id: sideChatId,
+        parentThreadId: parentId,
+        relationshipToParent: "fork",
+        rootThreadId: parentId,
+        sideChat: true,
+        runId: RunId.make("rollup-side-chat-run"),
+        outputTokens: 20, // $0.10
+      });
+      yield* seedThread({
+        id: nestedSubagentId,
+        parentThreadId: sideChatId,
+        relationshipToParent: "subagent",
+        rootThreadId: parentId,
+        runId: RunId.make("rollup-nested-subagent-run"),
+        outputTokens: 10, // $0.05 (rolls into sideChats via its parent side chat)
+      });
+      yield* seedThread({
+        id: directSubagentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+        rootThreadId: parentId,
+        runId: RunId.make("rollup-direct-subagent-run"),
+        outputTokens: 30, // $0.15
+      });
+      yield* store.apply({
+        id: EventId.make("ev:subagent:direct"),
+        type: "subagent.updated",
+        threadId: parentId,
+        occurredAt: now,
+        payload: {
+          id: NodeId.make("subagent-node:direct"),
+          threadId: parentId,
+          runId: parentRunId,
+          parentNodeId: NodeId.make(`node:${parentId}`),
+          origin: "app_owned",
+          createdBy: "agent",
+          driver: ProviderDriverKind.make("codex"),
+          providerInstanceId: modelSelection.instanceId,
+          childThreadId: directSubagentId,
+          providerThreadId: null,
+          nativeTaskRef: null,
+          prompt: "Do work",
+          title: "Direct subagent",
+          model: modelSelection.model,
+          status: "completed",
+          result: "Done",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+        },
+      });
+      // Ordinary user fork must NOT roll up into parentId.
+      yield* seedThread({
+        id: ordinaryForkId,
+        parentThreadId: parentId,
+        relationshipToParent: "fork",
+        rootThreadId: parentId,
+        runId: RunId.make("rollup-ordinary-fork-run"),
+        outputTokens: 1000, // $5.00 (excluded!)
+      });
+
+      const service = yield* UsageService.make.pipe(Effect.provideContext(context));
+      const parentCost = yield* service.readThreadCost({ threadId: parentId });
+      assert.closeTo(parentCost.costUsd ?? NaN, 1.0, 1e-12);
+      assert.strictEqual(parentCost.pricedTurns, 5);
+      assert.isFalse(parentCost.partial);
+      assert.closeTo(parentCost.breakdown?.direct.costUsd ?? NaN, 0.5, 1e-12);
+      assert.closeTo(parentCost.breakdown?.rewrites?.costUsd ?? NaN, 0.2, 1e-12);
+      assert.strictEqual(parentCost.breakdown?.rewrites?.threadCount, 1);
+      assert.closeTo(parentCost.breakdown?.sideChats?.costUsd ?? NaN, 0.15, 1e-12);
+      assert.closeTo(parentCost.breakdown?.subagents?.costUsd ?? NaN, 0.15, 1e-12);
+      assert.strictEqual(parentCost.runs.length, 1);
+      // Parent run includes direct ($0.50) + rewrite ($0.20) + direct subagent ($0.15) = $0.85,
+      // NOT the standalone side chat ($0.15) or ordinary fork ($5.00).
+      assert.closeTo(parentCost.runs[0]?.costUsd ?? NaN, 0.85, 1e-12);
+      assert.closeTo(
+        parentCost.runs[0]?.breakdown?.rewriteCandidates?.[0]?.costUsd ?? NaN,
+        0.2,
+        1e-12,
+      );
+
+      // Reading the side chat directly only includes the side chat ($0.10) + its own nested subagent ($0.05).
+      const sideChatCost = yield* service.readThreadCost({ threadId: sideChatId });
+      assert.closeTo(sideChatCost.costUsd ?? NaN, 0.15, 1e-12);
+      assert.closeTo(sideChatCost.breakdown?.direct.costUsd ?? NaN, 0.1, 1e-12);
+      assert.closeTo(sideChatCost.breakdown?.subagents?.costUsd ?? NaN, 0.05, 1e-12);
+
+      // Reading the ordinary fork directly only includes its own cost ($5.00).
+      const forkCost = yield* service.readThreadCost({ threadId: ordinaryForkId });
+      assert.closeTo(forkCost.costUsd ?? NaN, 5.0, 1e-12);
+      assert.isUndefined(forkCost.breakdown);
+    }).pipe(
+      Effect.provide(
+        layerService({
+          prefix: "thread-cost-rollup",
+          home,
+          settings,
+          ratesDocument: {
+            "test-model": {
+              input_cost_per_token: 0.001,
+              output_cost_per_token: 0.005,
+            },
+          },
+        }),
+      ),
+    );
+  }),
+);

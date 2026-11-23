@@ -1,4 +1,10 @@
-import { RunId, RunAttemptId, ProviderInstanceId, type TurnTokenUsage } from "@t3tools/contracts";
+import {
+  RunId,
+  RunAttemptId,
+  ProviderInstanceId,
+  ThreadId,
+  type TurnTokenUsage,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 
@@ -9,6 +15,7 @@ import {
   createOverrideRateTable,
   lookupRate,
   parseRateTable,
+  priceThreadCostTree,
   priceUsage,
   priceThreadUsage,
 } from "./usagePricing.ts";
@@ -633,5 +640,103 @@ describe("thread cost", () => {
         { runId: unknownRunId, costUsd: null, pricedTurns: 0, unpricedTurns: 1, partial: true },
       ],
     });
+  });
+
+  it("rolls up rewrites, side chats, and subagents into thread and run breakdowns", () => {
+    const rewriteA = ThreadId.make("rewrite-a");
+    const rewriteB = ThreadId.make("rewrite-b");
+    const sideChat = ThreadId.make("side-chat");
+    const subagent = ThreadId.make("subagent-child");
+    const emptySideChat = ThreadId.make("empty-side-chat");
+
+    const result = priceThreadCostTree(
+      {
+        root: projection(),
+        children: [
+          {
+            threadId: rewriteA,
+            category: "rewrite",
+            ownerRunId: runId,
+            rewriteCandidateThreadId: rewriteA,
+            records: projection(),
+          },
+          {
+            threadId: rewriteB,
+            category: "rewrite",
+            ownerRunId: runId,
+            rewriteCandidateThreadId: rewriteB,
+            records: {
+              ...projection(),
+              runs: [{ id: runId, modelSelection: { ...selection, model: "unknown-model" } }],
+            },
+          },
+          {
+            threadId: sideChat,
+            category: "side_chat",
+            ownerRunId: null,
+            rewriteCandidateThreadId: null,
+            records: projection(),
+          },
+          {
+            threadId: subagent,
+            category: "subagent",
+            ownerRunId: runId,
+            rewriteCandidateThreadId: null,
+            records: projection(),
+          },
+          {
+            threadId: emptySideChat,
+            category: "side_chat",
+            ownerRunId: null,
+            rewriteCandidateThreadId: null,
+            records: { runs: [], attempts: [], providerTurns: [] },
+          },
+        ],
+      },
+      rates,
+      new Map(),
+      new Map(),
+    );
+
+    expect(result.costUsd).toBeCloseTo(15.6 * 4);
+    expect(result.pricedTurns).toBe(4);
+    expect(result.unpricedTurns).toBe(1);
+    expect(result.partial).toBe(true);
+    expect(result.breakdown?.direct.costUsd).toBeCloseTo(15.6);
+    expect(result.breakdown?.rewrites).toMatchObject({
+      costUsd: 15.6,
+      pricedTurns: 1,
+      unpricedTurns: 1,
+      partial: true,
+      threadCount: 2,
+    });
+    expect(result.breakdown?.sideChats).toMatchObject({
+      costUsd: 15.6,
+      pricedTurns: 1,
+      unpricedTurns: 0,
+      partial: false,
+      threadCount: 1,
+    });
+    expect(result.breakdown?.subagents).toMatchObject({
+      costUsd: 15.6,
+      pricedTurns: 1,
+      unpricedTurns: 0,
+      partial: false,
+      threadCount: 1,
+    });
+
+    const parentRun = result.runs.find((entry) => entry.runId === runId);
+    expect(parentRun?.costUsd).toBeCloseTo(15.6 * 3);
+    expect(parentRun?.breakdown?.direct.costUsd).toBeCloseTo(15.6);
+    expect(parentRun?.breakdown?.rewrites?.threadCount).toBe(2);
+    expect(parentRun?.breakdown?.subagents?.threadCount).toBe(1);
+    expect(parentRun?.breakdown?.rewriteCandidates).toHaveLength(2);
+    expect(
+      parentRun?.breakdown?.rewriteCandidates?.find((entry) => entry.threadId === rewriteA)
+        ?.costUsd,
+    ).toBeCloseTo(15.6);
+    expect(
+      parentRun?.breakdown?.rewriteCandidates?.find((entry) => entry.threadId === rewriteB),
+    ).toMatchObject({ costUsd: null, unpricedTurns: 1, partial: true });
   });
 });

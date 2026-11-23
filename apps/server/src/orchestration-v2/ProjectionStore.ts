@@ -469,6 +469,30 @@ export type ProjectionRecords<K extends ProjectionRecordField> = Pick<
   "thread" | K
 >;
 
+export type ThreadCostChildCategory = "rewrite" | "side_chat" | "subagent";
+
+export interface ThreadCostThreadRecords {
+  readonly threadId: ThreadId;
+  readonly runs: ReadonlyArray<OrchestrationV2Run>;
+  readonly attempts: ReadonlyArray<OrchestrationV2ThreadProjection["attempts"][number]>;
+  readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
+}
+
+export interface ThreadCostChildNode {
+  readonly threadId: ThreadId;
+  readonly category: ThreadCostChildCategory;
+  /** Parent run on the target thread that spawned this rewrite or subagent, if any. */
+  readonly ownerRunId: RunId | null;
+  /** Direct rewrite candidate thread on the target thread when `category === "rewrite"`. */
+  readonly rewriteCandidateThreadId: ThreadId | null;
+  readonly records: ThreadCostThreadRecords;
+}
+
+export interface ThreadCostTree {
+  readonly root: ThreadCostThreadRecords;
+  readonly children: ReadonlyArray<ThreadCostChildNode>;
+}
+
 /**
  * A page holds the oldest matches after `afterPosition`, or with `beforePosition`,
  * the newest matches before it. `itemId` ignores both bounds.
@@ -604,6 +628,13 @@ export interface ProjectionStoreV2Shape {
     fields: ReadonlyArray<K>,
     filter?: ProjectionRecordFilter,
   ) => Effect.Effect<ProjectionRecords<K>, ProjectionStoreV2Error>;
+  /**
+   * Read the thread's cost records together with all recursively owned side threads
+   * (rewrites, side chats, and subagents), excluding ordinary user forks.
+   */
+  readonly getThreadCostTree: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadCostTree, ProjectionStoreV2Error>;
 
   readonly apply: (
     event: OrchestrationV2DomainEvent,
@@ -7052,6 +7083,262 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.mapError(controlReadError(threadId)),
       );
 
+    const MAX_COST_TREE_THREADS = 500;
+
+    const getThreadCostTree: ProjectionStoreV2Shape["getThreadCostTree"] = Effect.fn(
+      "ProjectionStore.getThreadCostTree",
+    )(
+      function* (threadId) {
+        const rootRecords = yield* readCanonicalProjection(threadId, undefined, [
+          "runs",
+          "attempts",
+          "providerTurns",
+          "subagents",
+        ]);
+        const root: ThreadCostThreadRecords = {
+          threadId,
+          runs: rootRecords.runs,
+          attempts: rootRecords.attempts,
+          providerTurns: rootRecords.providerTurns,
+        };
+        const rootThreadId = rootRecords.thread.lineage.rootThreadId;
+
+        const familyRows = yield* sql<{
+          readonly thread_id: string;
+          readonly parent_thread_id: string | null;
+          readonly relationship_to_parent: string | null;
+          readonly side_chat: number | null;
+          readonly delegated_from_thread_id: string | null;
+        }>`
+          SELECT
+            thread_id,
+            json_extract(payload_json, '$.lineage.parentThreadId') AS parent_thread_id,
+            json_extract(payload_json, '$.lineage.relationshipToParent') AS relationship_to_parent,
+            json_extract(payload_json, '$.lineage.sideChat') AS side_chat,
+            json_extract(payload_json, '$.delegatedFrom.threadId') AS delegated_from_thread_id
+          FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NULL
+            AND CASE WHEN json_valid(payload_json)
+              THEN json_extract(payload_json, '$.lineage.rootThreadId') END = ${rootThreadId}
+        `;
+
+        const liveInFamily = new Set<ThreadId>();
+        const ownedByParent = new Map<
+          ThreadId,
+          Array<{ readonly threadId: ThreadId; readonly category: "side_chat" | "subagent" }>
+        >();
+        const addOwnedEdge = (
+          parentId: ThreadId,
+          childId: ThreadId,
+          category: "side_chat" | "subagent",
+        ) => {
+          const existing = ownedByParent.get(parentId);
+          if (existing) existing.push({ threadId: childId, category });
+          else ownedByParent.set(parentId, [{ threadId: childId, category }]);
+        };
+
+        for (const row of familyRows) {
+          const childId = ThreadId.make(row.thread_id);
+          liveInFamily.add(childId);
+          if (childId === threadId) continue;
+          if (row.side_chat === 1 && row.parent_thread_id !== null) {
+            addOwnedEdge(ThreadId.make(row.parent_thread_id), childId, "side_chat");
+          } else if (row.relationship_to_parent === "subagent" && row.parent_thread_id !== null) {
+            addOwnedEdge(ThreadId.make(row.parent_thread_id), childId, "subagent");
+          } else if (row.delegated_from_thread_id !== null) {
+            addOwnedEdge(ThreadId.make(row.delegated_from_thread_id), childId, "subagent");
+          }
+        }
+
+        interface PendingChild {
+          readonly threadId: ThreadId;
+          readonly category: ThreadCostChildCategory;
+          readonly ownerRunId: RunId | null;
+          readonly rewriteCandidateThreadId: ThreadId | null;
+        }
+
+        const visited = new Set<ThreadId>([threadId]);
+        const discovered: Array<PendingChild> = [];
+        let frontier: Array<PendingChild> = [];
+        const enqueue = (node: PendingChild) => {
+          if (visited.has(node.threadId) || visited.size >= MAX_COST_TREE_THREADS) return;
+          visited.add(node.threadId);
+          discovered.push(node);
+          frontier.push(node);
+        };
+
+        // Prioritize direct rewrite candidates first so they always carry category "rewrite"
+        // and their originating runId even though they also have lineage.sideChat === true.
+        for (const run of rootRecords.runs) {
+          for (const candidate of run.rewrites?.candidates ?? []) {
+            enqueue({
+              threadId: candidate.threadId,
+              category: "rewrite",
+              ownerRunId: run.id,
+              rewriteCandidateThreadId: candidate.threadId,
+            });
+          }
+        }
+        // Next, direct subagents recorded on the target thread (carrying their spawning runId).
+        for (const subagent of rootRecords.subagents) {
+          if (subagent.childThreadId !== null) {
+            enqueue({
+              threadId: subagent.childThreadId,
+              category: "subagent",
+              ownerRunId: subagent.runId,
+              rewriteCandidateThreadId: null,
+            });
+          }
+        }
+        // Finally, remaining direct owned children from lineage (side chats and subagents).
+        for (const edge of ownedByParent.get(threadId) ?? []) {
+          enqueue({
+            threadId: edge.threadId,
+            category: edge.category,
+            ownerRunId: null,
+            rewriteCandidateThreadId: null,
+          });
+        }
+
+        // BFS downward through owned descendants (side chats / rewrites / subagents spawned by children).
+        while (frontier.length > 0 && visited.size < MAX_COST_TREE_THREADS) {
+          const current = frontier;
+          frontier = [];
+          const currentIds = current.map((node) => node.threadId);
+          const subagentLinks = yield* sql<{
+            readonly thread_id: string;
+            readonly child_thread_id: string;
+          }>`
+            SELECT thread_id, child_thread_id
+            FROM orchestration_v2_projection_subagents
+            WHERE thread_id IN (SELECT value FROM json_each(${encodeIdList(currentIds)}))
+              AND child_thread_id IS NOT NULL
+          `;
+          const subagentChildrenByParent = new Map<ThreadId, Array<ThreadId>>();
+          for (const link of subagentLinks) {
+            const parentId = ThreadId.make(link.thread_id);
+            const childId = ThreadId.make(link.child_thread_id);
+            const list = subagentChildrenByParent.get(parentId);
+            if (list) list.push(childId);
+            else subagentChildrenByParent.set(parentId, [childId]);
+          }
+          for (const parent of current) {
+            for (const childId of subagentChildrenByParent.get(parent.threadId) ?? []) {
+              enqueue({
+                threadId: childId,
+                category: parent.category,
+                ownerRunId: parent.ownerRunId,
+                rewriteCandidateThreadId: parent.rewriteCandidateThreadId,
+              });
+            }
+            for (const edge of ownedByParent.get(parent.threadId) ?? []) {
+              enqueue({
+                threadId: edge.threadId,
+                category: parent.category,
+                ownerRunId: parent.ownerRunId,
+                rewriteCandidateThreadId: parent.rewriteCandidateThreadId,
+              });
+            }
+          }
+        }
+
+        if (discovered.length === 0) {
+          return { root, children: [] };
+        }
+
+        // Verify any child discovered outside the rootThreadId family still exists and is not deleted.
+        const unverifiedIds = discovered
+          .map((node) => node.threadId)
+          .filter((id) => !liveInFamily.has(id));
+        if (unverifiedIds.length > 0) {
+          const existingRows = yield* sql<{ readonly thread_id: string }>`
+            SELECT thread_id
+            FROM orchestration_v2_projection_threads
+            WHERE thread_id IN (SELECT value FROM json_each(${encodeIdList(unverifiedIds)}))
+              AND deleted_at IS NULL
+          `;
+          for (const row of existingRows) {
+            liveInFamily.add(ThreadId.make(row.thread_id));
+          }
+        }
+
+        const liveChildren = discovered.filter((node) => liveInFamily.has(node.threadId));
+        if (liveChildren.length === 0) {
+          return { root, children: [] };
+        }
+
+        const childIdList = encodeIdList(liveChildren.map((node) => node.threadId));
+        const [runRows, attemptRows, providerTurnRows] = yield* Effect.all([
+          sql<{ readonly thread_id: string; readonly payload_json: string }>`
+            SELECT thread_id, payload_json
+            FROM orchestration_v2_projection_runs
+            WHERE thread_id IN (SELECT value FROM json_each(${childIdList}))
+            ORDER BY thread_id ASC, ordinal ASC
+          `,
+          sql<{ readonly thread_id: string; readonly payload_json: string }>`
+            SELECT thread_id, payload_json
+            FROM orchestration_v2_projection_run_attempts
+            WHERE thread_id IN (SELECT value FROM json_each(${childIdList}))
+            ORDER BY thread_id ASC, attempt_ordinal ASC
+          `,
+          sql<{ readonly thread_id: string; readonly payload_json: string }>`
+            SELECT thread_id, payload_json
+            FROM orchestration_v2_projection_provider_turns
+            WHERE thread_id IN (SELECT value FROM json_each(${childIdList}))
+            ORDER BY thread_id ASC, ordinal ASC
+          `,
+        ]);
+
+        const runsByThread = new Map<ThreadId, Array<OrchestrationV2Run>>();
+        for (const row of runRows) {
+          const childThreadId = ThreadId.make(row.thread_id);
+          const decoded = yield* decodeRunPayload(row.payload_json);
+          const list = runsByThread.get(childThreadId);
+          if (list) list.push(decoded);
+          else runsByThread.set(childThreadId, [decoded]);
+        }
+
+        const attemptsByThread = new Map<
+          ThreadId,
+          Array<OrchestrationV2ThreadProjection["attempts"][number]>
+        >();
+        for (const row of attemptRows) {
+          const childThreadId = ThreadId.make(row.thread_id);
+          const decoded = yield* decodeRunAttemptPayload(row.payload_json);
+          const list = attemptsByThread.get(childThreadId);
+          if (list) list.push(decoded);
+          else attemptsByThread.set(childThreadId, [decoded]);
+        }
+
+        const turnsByThread = new Map<ThreadId, Array<OrchestrationV2ProviderTurn>>();
+        for (const row of providerTurnRows) {
+          const childThreadId = ThreadId.make(row.thread_id);
+          const decoded = yield* decodeProviderTurnPayload(row.payload_json);
+          const list = turnsByThread.get(childThreadId);
+          if (list) list.push(decoded);
+          else turnsByThread.set(childThreadId, [decoded]);
+        }
+
+        return {
+          root,
+          children: liveChildren.map((node) => ({
+            threadId: node.threadId,
+            category: node.category,
+            ownerRunId: node.ownerRunId,
+            rewriteCandidateThreadId: node.rewriteCandidateThreadId,
+            records: {
+              threadId: node.threadId,
+              runs: runsByThread.get(node.threadId) ?? [],
+              attempts: attemptsByThread.get(node.threadId) ?? [],
+              providerTurns: turnsByThread.get(node.threadId) ?? [],
+            },
+          })),
+        };
+      },
+      (effect, threadId) =>
+        sql.withTransaction(effect).pipe(Effect.mapError(controlReadError(threadId))),
+    );
+
     const getRunProviderRecords: ProjectionStoreV2Shape["getRunProviderRecords"] = Effect.fn(
       "ProjectionStore.getRunProviderRecords",
     )(
@@ -9967,6 +10254,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getMessagesById: readOnReader(getMessagesById),
       getThreadRecords: (threadId, fields, filter) =>
         getThreadRecords(threadId, fields, filter).pipe(NodeSqliteClient.readOnly),
+      getThreadCostTree: readOnReader(getThreadCostTree),
       getRuntimeRequest: readOnReader(getRuntimeRequest),
       getPlan: readOnReader(getPlan),
       getProviderControlContext: readOnReader(getProviderControlContext),

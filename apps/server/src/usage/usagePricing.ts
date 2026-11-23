@@ -1,10 +1,17 @@
 import type {
   UsageCategoryCost,
+  UsageCostEstimate,
   UsageCostSource,
   UsageModelPriceOverride,
   UsageTokenTotals,
   OrchestrationV2ThreadProjection,
+  RewriteCandidateCost,
+  RunCost,
+  RunCostBreakdown,
   ThreadCost,
+  ThreadCostBreakdown,
+  ThreadCostCategory,
+  ThreadId,
   RunId,
 } from "@t3tools/contracts";
 import {
@@ -565,5 +572,218 @@ export function priceThreadUsage(
     unpricedTurns,
     partial,
     runs: runCosts,
+  };
+}
+
+export type ThreadCostPricingProjection = Parameters<typeof priceThreadUsage>[0];
+
+export interface ThreadCostPricingChild {
+  readonly threadId: ThreadId;
+  readonly category: "rewrite" | "side_chat" | "subagent";
+  readonly ownerRunId: RunId | null;
+  readonly rewriteCandidateThreadId: ThreadId | null;
+  readonly records: ThreadCostPricingProjection;
+}
+
+export interface ThreadCostPricingTree {
+  readonly root: ThreadCostPricingProjection;
+  readonly children: ReadonlyArray<ThreadCostPricingChild>;
+}
+
+const EMPTY_COST_ESTIMATE: UsageCostEstimate = {
+  costUsd: null,
+  pricedTurns: 0,
+  unpricedTurns: 0,
+  partial: false,
+};
+
+function hasRecordedTurns(estimate: UsageCostEstimate): boolean {
+  return estimate.pricedTurns > 0 || estimate.unpricedTurns > 0;
+}
+
+function mergeCostEstimates(a: UsageCostEstimate, b: UsageCostEstimate): UsageCostEstimate {
+  const pricedTurns = a.pricedTurns + b.pricedTurns;
+  const unpricedTurns = a.unpricedTurns + b.unpricedTurns;
+  return {
+    costUsd: pricedTurns === 0 ? null : (a.costUsd ?? 0) + (b.costUsd ?? 0),
+    pricedTurns,
+    unpricedTurns,
+    partial: a.partial || b.partial || unpricedTurns > 0,
+  };
+}
+
+interface MutableCategoryAccumulator {
+  estimate: UsageCostEstimate;
+  readonly threads: Set<ThreadId>;
+}
+
+function addToCategory(
+  acc: MutableCategoryAccumulator,
+  threadId: ThreadId,
+  estimate: UsageCostEstimate,
+) {
+  if (!hasRecordedTurns(estimate)) return;
+  acc.estimate = mergeCostEstimates(acc.estimate, estimate);
+  acc.threads.add(threadId);
+}
+
+function finalizeCategory(acc: MutableCategoryAccumulator): ThreadCostCategory | undefined {
+  if (!hasRecordedTurns(acc.estimate)) return undefined;
+  return { ...acc.estimate, threadCount: acc.threads.size };
+}
+
+export function priceThreadCostTree(
+  tree: ThreadCostPricingTree,
+  rates: RateTable,
+  overrides: RateTable,
+  aliases: ReadonlyMap<string, string>,
+): ThreadCost {
+  const direct = priceThreadUsage(tree.root, rates, overrides, aliases);
+  if (tree.children.length === 0) return direct;
+
+  const directEstimate: UsageCostEstimate = {
+    costUsd: direct.costUsd,
+    pricedTurns: direct.pricedTurns,
+    unpricedTurns: direct.unpricedTurns,
+    partial: direct.partial,
+  };
+  const threadRewrites: MutableCategoryAccumulator = {
+    estimate: EMPTY_COST_ESTIMATE,
+    threads: new Set(),
+  };
+  const threadSideChats: MutableCategoryAccumulator = {
+    estimate: EMPTY_COST_ESTIMATE,
+    threads: new Set(),
+  };
+  const threadSubagents: MutableCategoryAccumulator = {
+    estimate: EMPTY_COST_ESTIMATE,
+    threads: new Set(),
+  };
+
+  interface RunAccumulator {
+    readonly runId: RunId;
+    readonly direct: UsageCostEstimate;
+    readonly rewrites: MutableCategoryAccumulator;
+    readonly subagents: MutableCategoryAccumulator;
+    readonly candidateCosts: Map<ThreadId, UsageCostEstimate>;
+  }
+
+  const runMap = new Map<RunId, RunAccumulator>();
+  for (const runCost of direct.runs) {
+    runMap.set(runCost.runId, {
+      runId: runCost.runId,
+      direct: {
+        costUsd: runCost.costUsd,
+        pricedTurns: runCost.pricedTurns,
+        unpricedTurns: runCost.unpricedTurns,
+        partial: runCost.partial,
+      },
+      rewrites: { estimate: EMPTY_COST_ESTIMATE, threads: new Set() },
+      subagents: { estimate: EMPTY_COST_ESTIMATE, threads: new Set() },
+      candidateCosts: new Map(),
+    });
+  }
+
+  const getOrCreateRun = (runId: RunId): RunAccumulator => {
+    const existing = runMap.get(runId);
+    if (existing) return existing;
+    const created: RunAccumulator = {
+      runId,
+      direct: EMPTY_COST_ESTIMATE,
+      rewrites: { estimate: EMPTY_COST_ESTIMATE, threads: new Set() },
+      subagents: { estimate: EMPTY_COST_ESTIMATE, threads: new Set() },
+      candidateCosts: new Map(),
+    };
+    runMap.set(runId, created);
+    return created;
+  };
+
+  let totalEstimate = directEstimate;
+
+  for (const child of tree.children) {
+    const childCost = priceThreadUsage(child.records, rates, overrides, aliases);
+    const childEstimate: UsageCostEstimate = {
+      costUsd: childCost.costUsd,
+      pricedTurns: childCost.pricedTurns,
+      unpricedTurns: childCost.unpricedTurns,
+      partial: childCost.partial,
+    };
+    if (!hasRecordedTurns(childEstimate)) continue;
+
+    totalEstimate = mergeCostEstimates(totalEstimate, childEstimate);
+
+    if (child.category === "rewrite") {
+      const candidateId = child.rewriteCandidateThreadId ?? child.threadId;
+      addToCategory(threadRewrites, candidateId, childEstimate);
+      if (child.ownerRunId !== null) {
+        const runAcc = getOrCreateRun(child.ownerRunId);
+        addToCategory(runAcc.rewrites, candidateId, childEstimate);
+        const prevCandidate = runAcc.candidateCosts.get(candidateId) ?? EMPTY_COST_ESTIMATE;
+        runAcc.candidateCosts.set(candidateId, mergeCostEstimates(prevCandidate, childEstimate));
+      }
+    } else if (child.category === "subagent") {
+      addToCategory(threadSubagents, child.threadId, childEstimate);
+      if (child.ownerRunId !== null) {
+        const runAcc = getOrCreateRun(child.ownerRunId);
+        addToCategory(runAcc.subagents, child.threadId, childEstimate);
+      }
+    } else {
+      addToCategory(threadSideChats, child.threadId, childEstimate);
+    }
+  }
+
+  const finalizedRewrites = finalizeCategory(threadRewrites);
+  const finalizedSideChats = finalizeCategory(threadSideChats);
+  const finalizedSubagents = finalizeCategory(threadSubagents);
+  const hasAnyChildCost =
+    finalizedRewrites !== undefined ||
+    finalizedSideChats !== undefined ||
+    finalizedSubagents !== undefined;
+
+  if (!hasAnyChildCost) return direct;
+
+  const runs: Array<RunCost> = [...runMap.values()].map((runAcc) => {
+    const runRewrites = finalizeCategory(runAcc.rewrites);
+    const runSubagents = finalizeCategory(runAcc.subagents);
+    if (runRewrites === undefined && runSubagents === undefined) {
+      return {
+        runId: runAcc.runId,
+        ...runAcc.direct,
+      };
+    }
+    let combined = runAcc.direct;
+    if (runRewrites !== undefined) combined = mergeCostEstimates(combined, runRewrites);
+    if (runSubagents !== undefined) combined = mergeCostEstimates(combined, runSubagents);
+    const rewriteCandidates: ReadonlyArray<RewriteCandidateCost> | undefined =
+      runAcc.candidateCosts.size > 0
+        ? [...runAcc.candidateCosts.entries()].map(([threadId, estimate]) => ({
+            threadId,
+            ...estimate,
+          }))
+        : undefined;
+    const breakdown: RunCostBreakdown = {
+      direct: runAcc.direct,
+      ...(runRewrites !== undefined ? { rewrites: runRewrites } : {}),
+      ...(runSubagents !== undefined ? { subagents: runSubagents } : {}),
+      ...(rewriteCandidates !== undefined ? { rewriteCandidates } : {}),
+    };
+    return {
+      runId: runAcc.runId,
+      ...combined,
+      breakdown,
+    };
+  });
+
+  const breakdown: ThreadCostBreakdown = {
+    direct: directEstimate,
+    ...(finalizedRewrites !== undefined ? { rewrites: finalizedRewrites } : {}),
+    ...(finalizedSideChats !== undefined ? { sideChats: finalizedSideChats } : {}),
+    ...(finalizedSubagents !== undefined ? { subagents: finalizedSubagents } : {}),
+  };
+
+  return {
+    ...totalEstimate,
+    runs,
+    breakdown,
   };
 }

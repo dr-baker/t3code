@@ -1,4 +1,4 @@
-import { formatThreadCost } from "@t3tools/client-runtime/state/usage";
+import { formatCostAmount, formatThreadCost } from "@t3tools/client-runtime/state/usage";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
 import {
@@ -430,12 +430,68 @@ export const ChatHeader = memo(function ChatHeader({
           >
             {costLabel}
           </TooltipTrigger>
-          <TooltipPopup side="bottom">
-            Estimated API cost for recorded main-agent usage, including cache and speed pricing.
-            Subscription charges may differ.
-            {cost.data?.partial
-              ? " Partial total: some turns, models, or subagents are not included."
-              : ""}
+          <TooltipPopup side="bottom" className="max-w-xs">
+            <div className="flex flex-col gap-1.5 text-xs">
+              {cost.data?.breakdown ? (
+                <div className="flex flex-col gap-0.5 tabular-nums">
+                  {formatCostAmount(cost.data.breakdown.direct) ? (
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-muted-foreground">
+                        <T>Direct</T>
+                      </span>
+                      <span>{formatCostAmount(cost.data.breakdown.direct)}</span>
+                    </div>
+                  ) : null}
+                  {cost.data.breakdown.rewrites &&
+                  formatCostAmount(cost.data.breakdown.rewrites) ? (
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-muted-foreground">
+                        <T>
+                          Rewrites (<Var>{cost.data.breakdown.rewrites.threadCount}</Var>)
+                        </T>
+                      </span>
+                      <span>{formatCostAmount(cost.data.breakdown.rewrites)}</span>
+                    </div>
+                  ) : null}
+                  {cost.data.breakdown.sideChats &&
+                  formatCostAmount(cost.data.breakdown.sideChats) ? (
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-muted-foreground">
+                        <T>
+                          Side chats (<Var>{cost.data.breakdown.sideChats.threadCount}</Var>)
+                        </T>
+                      </span>
+                      <span>{formatCostAmount(cost.data.breakdown.sideChats)}</span>
+                    </div>
+                  ) : null}
+                  {cost.data.breakdown.subagents &&
+                  formatCostAmount(cost.data.breakdown.subagents) ? (
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-muted-foreground">
+                        <T>
+                          Subagents (<Var>{cost.data.breakdown.subagents.threadCount}</Var>)
+                        </T>
+                      </span>
+                      <span>{formatCostAmount(cost.data.breakdown.subagents)}</span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              <p className="text-muted-foreground">
+                <T>
+                  Estimated API cost for recorded usage, including rewrites, side chats, subagents,
+                  cache, and speed pricing. Subscription charges may differ.
+                </T>
+              </p>
+              {cost.data?.partial ? (
+                <p className="text-muted-foreground">
+                  <T>
+                    Partial total: some turns, models, or provider-native subagents are not
+                    included.
+                  </T>
+                </p>
+              ) : null}
+            </div>
           </TooltipPopup>
         </Tooltip>
       ) : null}

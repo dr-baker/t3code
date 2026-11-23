@@ -2,7 +2,9 @@ import type {
   EnvironmentId,
   UsageModelFilter,
   UsageSummaryInput,
+  RewriteCandidateCost,
   ThreadCost,
+  ThreadId,
   RunCost,
   RunId,
   UsageCostEstimate,
@@ -110,12 +112,19 @@ const threadCostFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
+export function formatCostAmount(cost: UsageCostEstimate | null): string | null {
+  if (!cost) return null;
+  if (cost.costUsd === null) return null;
+  const amount =
+    cost.costUsd > 0 && cost.costUsd < 0.01 ? "<$0.01" : threadCostFormatter.format(cost.costUsd);
+  return `${amount}${cost.partial ? "+" : ""}`;
+}
+
 export function formatThreadCost(cost: UsageCostEstimate | null): string | null {
   if (!cost) return null;
   if (cost.costUsd === null) return cost.unpricedTurns > 0 ? "API estimate unavailable" : null;
-  const amount =
-    cost.costUsd > 0 && cost.costUsd < 0.01 ? "<$0.01" : threadCostFormatter.format(cost.costUsd);
-  return `API ≈ ${amount}${cost.partial ? "+" : ""}`;
+  const amount = formatCostAmount(cost);
+  return amount === null ? null : `API ≈ ${amount}`;
 }
 
 const costsByRun = new WeakMap<ThreadCost, ReadonlyMap<RunId, RunCost>>();
@@ -128,4 +137,17 @@ export function getThreadRunCost(summary: ThreadCost | null, runId: RunId): RunC
     costsByRun.set(summary, index);
   }
   return index.get(runId) ?? null;
+}
+
+export function getRewriteCandidateCost(
+  summary: ThreadCost | null,
+  runId: RunId,
+  candidateThreadId: ThreadId,
+): RewriteCandidateCost | null {
+  const runCost = getThreadRunCost(summary, runId);
+  return (
+    runCost?.breakdown?.rewriteCandidates?.find(
+      (candidate) => candidate.threadId === candidateThreadId,
+    ) ?? null
+  );
 }

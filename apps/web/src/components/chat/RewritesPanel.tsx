@@ -1,13 +1,22 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
+import {
+  formatCostAmount,
+  getRewriteCandidateCost,
+  getThreadRunCost,
+} from "@t3tools/client-runtime/state/usage";
 import type {
   OrchestrationV2RunStatus,
+  RunId,
   ScopedThreadRef,
   ServerProvider,
+  ThreadCost,
   ThreadId,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
+import * as Option from "effect/Option";
+import { AsyncResult } from "effect/reactivity";
 import { T, useGT, Var } from "gt-react";
 import {
   ArrowUpRightIcon,
@@ -61,6 +70,7 @@ const statusLabel = {
 
 function RewriteCard({
   parentRef,
+  parentRunId,
   candidate,
   providers,
   selected,
@@ -68,6 +78,7 @@ function RewriteCard({
   onSelect,
 }: {
   parentRef: ScopedThreadRef;
+  parentRunId: RunId;
   candidate: RewriteGroup["candidates"][number];
   providers: ReadonlyArray<ServerProvider>;
   selected: boolean;
@@ -80,6 +91,19 @@ function RewriteCard({
   const hasSnapshot = useEnvironmentShellHasSnapshot(parentRef.environmentId);
   const projection = useQuietThreadProjection(shell ? ref : null)?.projection;
   const copyText = useRewriteCopyText(shell ? ref : null, candidate.runId);
+  const candidateCost = useAtomValue(
+    serverEnvironment.threadCost({
+      environmentId: parentRef.environmentId,
+      input: { threadId: parentRef.threadId },
+    }),
+    (result: AsyncResult.AsyncResult<ThreadCost, unknown>) =>
+      getRewriteCandidateCost(
+        Option.getOrNull(AsyncResult.value(result)),
+        parentRunId,
+        candidate.threadId,
+      ),
+  );
+  const candidateCostLabel = formatCostAmount(candidateCost);
   const status = projection?.runs.find((run) => run.id === candidate.runId)?.status;
   const ready = status === "completed" || status === "waiting";
   const needsInput = projection?.runtimeRequests.some(
@@ -140,8 +164,10 @@ function RewriteCard({
                 </span>
               ) : null}
             </div>
-            <p className="truncate text-2xs leading-snug text-muted-foreground">
-              {display.subtitle}
+            <p className="truncate text-2xs leading-snug text-muted-foreground tabular-nums">
+              {candidateCostLabel
+                ? `${display.subtitle} · ${candidateCostLabel}`
+                : display.subtitle}
             </p>
           </div>
         </div>
@@ -208,6 +234,18 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(threadRef.environmentId));
   const parent = useQuietThreadShell(threadRef);
   const projection = useQuietThreadProjection(threadRef)?.projection;
+  const originalCostLabel = formatCostAmount(
+    useAtomValue(
+      serverEnvironment.threadCost({
+        environmentId: threadRef.environmentId,
+        input: { threadId: threadRef.threadId },
+      }),
+      (result: AsyncResult.AsyncResult<ThreadCost, unknown>) => {
+        const runCost = getThreadRunCost(Option.getOrNull(AsyncResult.value(result)), runId);
+        return runCost?.breakdown?.direct ?? runCost;
+      },
+    ),
+  );
   const source = projection?.runs.find((run) => run.id === runId);
   const group = source?.rewrites;
   const history = useThreadHistory(threadRef);
@@ -375,7 +413,12 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
               <span className="font-medium text-foreground">
                 <T>Original</T>
               </span>
-              <span className="truncate text-muted-foreground">· {sourceDisplay.inlineLabel}</span>
+              <span className="truncate text-muted-foreground tabular-nums">
+                ·{" "}
+                {originalCostLabel
+                  ? `${sourceDisplay.inlineLabel} · ${originalCostLabel}`
+                  : sourceDisplay.inlineLabel}
+              </span>
             </div>
             <Button
               size="icon-xs"
@@ -399,6 +442,7 @@ export function RewritesPanel({ threadRef, runId }: AnswerRef) {
             <RewriteCard
               key={candidate.threadId}
               parentRef={threadRef}
+              parentRunId={runId}
               candidate={candidate}
               providers={config.providers}
               selected={group.selectedThreadId === candidate.threadId}

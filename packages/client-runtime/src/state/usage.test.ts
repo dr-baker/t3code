@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   RunId,
+  ThreadId,
   type ThreadCost,
   UsageDay,
   USAGE_CONTRACT_VERSION,
@@ -13,7 +14,14 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { EnvironmentPresentation } from "../connection/presentation.ts";
-import { refreshUsage, refreshUsageLimits, formatThreadCost, getThreadRunCost } from "./usage.ts";
+import {
+  refreshUsage,
+  refreshUsageLimits,
+  formatCostAmount,
+  formatThreadCost,
+  getRewriteCandidateCost,
+  getThreadRunCost,
+} from "./usage.ts";
 
 const input = {
   sinceDay: UsageDay.make("2026-09-05"),
@@ -263,4 +271,40 @@ it("selects each message's cost and reflects refreshed estimates", () => {
     getThreadRunCost({ ...summary, runs: [{ ...first, costUsd: 2.5 }, second] }, first.runId)
       ?.costUsd,
   ).toBe(2.5);
+
+  const candidateId = ThreadId.make("rewrite-candidate-1");
+  const withBreakdown: ThreadCost = {
+    ...summary,
+    runs: [
+      {
+        ...first,
+        breakdown: {
+          direct: { costUsd: 1.0, pricedTurns: 1, unpricedTurns: 0, partial: false },
+          rewrites: {
+            costUsd: 0.25,
+            pricedTurns: 1,
+            unpricedTurns: 0,
+            partial: false,
+            threadCount: 1,
+          },
+          rewriteCandidates: [
+            {
+              threadId: candidateId,
+              costUsd: 0.25,
+              pricedTurns: 1,
+              unpricedTurns: 0,
+              partial: false,
+            },
+          ],
+        },
+      },
+      second,
+    ],
+  };
+  expect(formatCostAmount(getRewriteCandidateCost(withBreakdown, first.runId, candidateId))).toBe(
+    "$0.25",
+  );
+  expect(
+    getRewriteCandidateCost(withBreakdown, first.runId, ThreadId.make("missing-candidate")),
+  ).toBeNull();
 });

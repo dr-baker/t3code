@@ -5,8 +5,6 @@ import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
   type EnvironmentThreadState,
   createOlderSettledThreadAtoms,
-  createThreadEnvironmentAtoms,
-  createThreadFamilyAtoms,
 } from "@t3tools/client-runtime/state/threads";
 import { createSteadyShellAtoms } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
@@ -23,21 +21,23 @@ import {
 import { serverEnvironment } from "./server";
 import { environmentShell } from "./shell";
 import { threadOutboxManager } from "./thread-outbox";
-import { environmentThreadDetails, environmentThreads } from "./threadDetails";
+import {
+  environmentThreadDetails,
+  environmentThreads,
+  threadEnvironment,
+  threadFamilies,
+} from "./threadDetails";
 
-export { environmentThreadDetails, environmentThreads } from "./threadDetails";
+export {
+  environmentThreadDetails,
+  environmentThreads,
+  threadEnvironment,
+  threadFamilies,
+} from "./threadDetails";
 
-export const threadFamilies = createThreadFamilyAtoms(
-  connectionAtomRuntime,
-  environmentShell.stateAtom,
-);
 export const olderSettledThreads = createOlderSettledThreadAtoms(
   connectionAtomRuntime,
   environmentShell.stateAtom,
-);
-export const threadEnvironment = createThreadEnvironmentAtoms(
-  connectionAtomRuntime,
-  threadFamilies.snapshotAtom,
 );
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,

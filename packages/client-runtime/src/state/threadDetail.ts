@@ -2,8 +2,12 @@ import {
   OrchestrationV2AppThread,
   OrchestrationV2ConversationMessage,
   OrchestrationV2TurnItem,
+  type EnvironmentId,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShell,
+  type OrchestrationV2ThreadShellSnapshot,
   type ScopedThreadRef,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -290,6 +294,9 @@ export function createEnvironmentThreadDetailAtoms<E>(
     environmentId: ScopedThreadRef["environmentId"],
     threadId: ScopedThreadRef["threadId"],
   ) => Atom.Atom<AsyncResult.AsyncResult<EnvironmentThreadState, E>>,
+  threadSnapshotAtom?: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<OrchestrationV2ThreadShellSnapshot | null>,
 ) {
   const threadStateValueAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
@@ -624,18 +631,74 @@ export function createEnvironmentThreadDetailAtoms<E>(
     ).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-workspace-mutation-id:${key}`)),
   );
 
-  const costRevisionAtomFamily = Atom.family((key: string) =>
-    Atom.make((get) => {
+  const LIVE_CHILD_SHELL_STATUSES = new Set(["queued", "preparing", "starting", "running"]);
+
+  const ownedChildCostRevision = (
+    threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+    environmentId: EnvironmentId,
+    rootThreadId: ThreadId,
+  ) => {
+    const ownedByParent = new Map<ThreadId, Array<OrchestrationV2ThreadShell>>();
+    const addChild = (parentId: ThreadId, child: OrchestrationV2ThreadShell) => {
+      const list = ownedByParent.get(parentId);
+      if (list) list.push(child);
+      else ownedByParent.set(parentId, [child]);
+    };
+    for (const thread of threads) {
+      if (thread.deletedAt !== null) continue;
+      const parent = thread.lineage.parentThreadId;
+      if (
+        parent !== null &&
+        (thread.lineage.sideChat === true || thread.lineage.relationshipToParent === "subagent")
+      ) {
+        addChild(parent, thread);
+      } else if (
+        thread.delegatedFrom !== undefined &&
+        thread.delegatedFrom.environmentId === environmentId
+      ) {
+        addChild(thread.delegatedFrom.threadId, thread);
+      }
+    }
+    const seen = new Set<ThreadId>([rootThreadId]);
+    const queue: Array<ThreadId> = [rootThreadId];
+    const entries: Array<[string, string | null, string, string]> = [];
+    for (const parentId of queue) {
+      for (const child of ownedByParent.get(parentId) ?? []) {
+        if (seen.has(child.id)) continue;
+        seen.add(child.id);
+        queue.push(child.id);
+        entries.push([
+          child.id,
+          child.latestRunId,
+          child.latestRunCompletedAt ? String(child.latestRunCompletedAt) : "",
+          LIVE_CHILD_SHELL_STATUSES.has(child.status) ? "live" : child.status,
+        ]);
+      }
+    }
+    entries.sort((left, right) => (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0));
+    return entries;
+  };
+
+  const costRevisionAtomFamily = Atom.family((key: string) => {
+    const ref = parseThreadKey(key);
+    return Atom.make((get) => {
       const projection = get(quietThreadAtomFamily(key))?.projection;
-      if (!projection) return "";
+      const childThreads = threadSnapshotAtom
+        ? (get(threadSnapshotAtom(ref.environmentId))?.threads ?? [])
+        : [];
+      const childEntries = ownedChildCostRevision(childThreads, ref.environmentId, ref.threadId);
+      if (!projection && childEntries.length === 0) return "";
       return JSON.stringify([
-        projection.runs.length,
-        projection.providerTurns
-          .filter((turn) => turn.status !== "pending" && turn.status !== "running")
-          .map((turn) => [turn.id, turn.status, turn.turnTokenUsage]),
+        projection?.runs.length ?? 0,
+        projection
+          ? projection.providerTurns
+              .filter((turn) => turn.status !== "pending" && turn.status !== "running")
+              .map((turn) => [turn.id, turn.status, turn.turnTokenUsage])
+          : [],
+        childEntries,
       ]);
-    }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-cost-revision:${key}`)),
-  );
+    }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-cost-revision:${key}`));
+  });
 
   return {
     costRevisionAtom: (ref: ScopedThreadRef) => costRevisionAtomFamily(threadKey(ref)),

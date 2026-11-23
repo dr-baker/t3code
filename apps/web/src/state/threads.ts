@@ -7,8 +7,6 @@ import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
   type EnvironmentThreadState,
   createOlderSettledThreadAtoms,
-  createThreadEnvironmentAtoms,
-  createThreadFamilyAtoms,
 } from "@t3tools/client-runtime/state/threads";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -18,21 +16,18 @@ import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { serverEnvironment } from "./server";
 import { environmentShell } from "./shell";
-import { environmentThreadDetails, environmentThreads } from "./threadDetails";
+import {
+  environmentThreadDetails,
+  environmentThreads,
+  threadEnvironment,
+  threadFamilies,
+} from "./threadDetails";
 
-export { environmentThreadDetails } from "./threadDetails";
+export { environmentThreadDetails, threadEnvironment, threadFamilies } from "./threadDetails";
 
-export const threadFamilies = createThreadFamilyAtoms(
-  connectionAtomRuntime,
-  environmentShell.stateAtom,
-);
 export const olderSettledThreads = createOlderSettledThreadAtoms(
   connectionAtomRuntime,
   environmentShell.stateAtom,
-);
-export const threadEnvironment = createThreadEnvironmentAtoms(
-  connectionAtomRuntime,
-  threadFamilies.snapshotAtom,
 );
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
