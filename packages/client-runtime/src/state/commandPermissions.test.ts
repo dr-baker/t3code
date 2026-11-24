@@ -554,13 +554,29 @@ it.effect("checks the destination operate grant for starting and choosing rewrit
       }),
     );
     const dispatch = createCommandPermissions(runtime, ORCHESTRATION_V2_WS_METHODS.dispatchCommand);
-    for (const type of ["thread.rewrites.start", "thread.rewrites.select"]) {
+    for (const type of [
+      "thread.rewrites.start",
+      "thread.rewrites.select",
+      "thread.compare.attach",
+      "thread.compare.pick-winner",
+      "thread.compare.undo-pick",
+      "thread.compare.pop-out",
+      "thread.compare.drop",
+    ]) {
       const input = { type };
       expect(registry.get(dispatch.permissionAtom(env, input))).toBe(true);
       expect(registry.get(dispatch.permissionAtom(other, input))).toBe(false);
       const denied = yield* dispatch.authorize(registry, other, input).pipe(Effect.flip);
       expect(denied.requiredPermission).toBe(AuthOrchestrationOperateScope);
     }
+    const startCompare = createCommandPermissions(
+      runtime,
+      ORCHESTRATION_V2_WS_METHODS.startCompare,
+    );
+    expect(registry.get(startCompare.permissionAtom(env))).toBe(true);
+    expect(registry.get(startCompare.permissionAtom(other))).toBe(false);
+    const deniedStart = yield* startCompare.authorize(registry, other).pipe(Effect.flip);
+    expect(deniedStart.requiredPermission).toBe(AuthOrchestrationOperateScope);
   }),
 );
 

@@ -1190,3 +1190,57 @@ export function createEnvironmentRpcCommand<
     permissionAtom: permissions.permissionAtom,
   };
 }
+
+export function createGuardedEnvironmentCommand<
+  R,
+  ER,
+  Input,
+  A,
+  E2,
+  R2 extends
+    | EnvironmentSupervisor.EnvironmentSupervisor
+    | EnvironmentRegistry.EnvironmentRegistry
+    | R = EnvironmentSupervisor.EnvironmentSupervisor,
+>(
+  runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
+  options: {
+    readonly label: string;
+    readonly tag: string;
+    readonly authInput?: (input: Input) => unknown;
+    readonly execute: (
+      input: Input,
+      registry: AtomRegistry.AtomRegistry,
+      environmentId: EnvironmentIdType,
+    ) => Effect.Effect<A, E2, R2>;
+    readonly scheduler?: AtomCommandScheduler;
+    readonly concurrency?: AtomCommandConcurrency<{
+      readonly environmentId: EnvironmentIdType;
+      readonly input: NoInfer<Input>;
+    }>;
+  },
+) {
+  const permissions = createCommandPermissions(runtime, options.tag);
+  const command = createEnvironmentCommand(runtime, {
+    label: options.label,
+    ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
+    ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
+    execute: (input: Input, registry, environmentId) =>
+      permissions
+        .authorize(registry, environmentId, options.authInput ? options.authInput(input) : input)
+        .pipe(
+          Effect.andThen(() => options.execute(input, registry, environmentId)),
+          Effect.provideService(RpcPermissionGuard, {
+            authorize: (id, method, payload) =>
+              createCommandPermissions(runtime, method).authorize(registry, id, payload),
+          }),
+        ),
+  });
+  const mapAuthInput = (input?: Input) =>
+    options.authInput ? options.authInput(input as Input) : input;
+  return {
+    ...command,
+    requiredScopes: (input?: Input) => permissions.requiredScopes(mapAuthInput(input)),
+    permissionAtom: (environmentId: EnvironmentIdType, input?: Input) =>
+      permissions.permissionAtom(environmentId, mapAuthInput(input)),
+  };
+}

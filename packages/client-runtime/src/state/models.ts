@@ -146,6 +146,17 @@ function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]): boolea
   );
 }
 
+export interface CompareHostRollup {
+  readonly totalCount: number;
+  readonly activeCount: number;
+  readonly readyCount: number;
+  readonly failedCount: number;
+  readonly needsAttentionCount: number;
+  readonly latestCompletedAt: string | null;
+  readonly earliestActiveStartedAt: string | null;
+  readonly activeStatus: "preparing" | "starting" | "running" | "waiting" | null;
+}
+
 export interface EnvironmentThreadShell {
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
@@ -158,6 +169,8 @@ export interface EnvironmentThreadShell {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
+  readonly compare: OrchestrationV2ThreadShell["compare"];
+  readonly compareRollup: CompareHostRollup | null;
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
   readonly linkOrigin: OrchestrationV2ThreadShell["linkOrigin"] | null;
   /** The thread in a linked environment that delegated this one, if one did. */
@@ -279,9 +292,10 @@ export function presentThreadShell(
   environmentId: EnvironmentId,
   thread: OrchestrationV2ThreadShell,
   pendingSubagentRequest: PendingSubagentRequest | null = null,
+  compareRollup: CompareHostRollup | null = null,
 ): EnvironmentThreadShell {
   const updatedAt = iso(thread.updatedAt);
-  const latestRun =
+  const ownLatestRun =
     thread.latestRunId === null
       ? null
       : ({
@@ -297,7 +311,69 @@ export function presentThreadShell(
               : nullableIso(thread.latestRunCompletedAt),
           assistantMessageId: null,
         } satisfies ThreadRunSummary);
-  const runtime = shellRuntime(thread);
+  const ownRuntime = shellRuntime(thread);
+  const allContendersFailed =
+    compareRollup !== null &&
+    compareRollup.activeCount === 0 &&
+    compareRollup.totalCount > 0 &&
+    compareRollup.failedCount === compareRollup.totalCount;
+  const anyContenderReady =
+    compareRollup !== null && compareRollup.activeCount === 0 && compareRollup.readyCount > 0;
+  const runtime: ThreadRuntimeSummary | null =
+    compareRollup !== null && compareRollup.activeCount > 0 && !threadRuntimeIsActive(ownRuntime)
+      ? {
+          status: compareRollup.activeStatus ?? "running",
+          activeRunId: ownRuntime?.activeRunId ?? null,
+          activityStartedAt:
+            compareRollup.earliestActiveStartedAt ?? ownRuntime?.activityStartedAt ?? updatedAt,
+          providerInstanceId: ownRuntime?.providerInstanceId ?? thread.providerInstanceId,
+          providerName: ownRuntime?.providerName ?? null,
+          lastError: ownRuntime?.lastError ?? null,
+          lastErrorClass: ownRuntime?.lastErrorClass ?? null,
+          lastErrorCode: ownRuntime?.lastErrorCode ?? null,
+          usageLimitResetAt: ownRuntime?.usageLimitResetAt ?? null,
+          updatedAt: ownRuntime?.updatedAt ?? updatedAt,
+        }
+      : allContendersFailed
+        ? {
+            status: "failed",
+            activeRunId: ownRuntime?.activeRunId ?? null,
+            activityStartedAt: ownRuntime?.activityStartedAt ?? null,
+            providerInstanceId: ownRuntime?.providerInstanceId ?? thread.providerInstanceId,
+            providerName: ownRuntime?.providerName ?? null,
+            lastError: ownRuntime?.lastError ?? "All compared models failed.",
+            lastErrorClass: ownRuntime?.lastErrorClass ?? null,
+            lastErrorCode: ownRuntime?.lastErrorCode ?? null,
+            usageLimitResetAt: ownRuntime?.usageLimitResetAt ?? null,
+            updatedAt: compareRollup.latestCompletedAt ?? ownRuntime?.updatedAt ?? updatedAt,
+          }
+        : anyContenderReady && ownRuntime?.status === "failed"
+          ? {
+              ...ownRuntime,
+              status: "idle",
+              lastError: null,
+              updatedAt: compareRollup.latestCompletedAt ?? ownRuntime.updatedAt,
+            }
+          : ownRuntime;
+  const latestRun: ThreadRunSummary | null =
+    compareRollup !== null &&
+    compareRollup.activeCount === 0 &&
+    (compareRollup.latestCompletedAt !== null || allContendersFailed || anyContenderReady) &&
+    (ownLatestRun === null ||
+      ownLatestRun.completedAt === null ||
+      (compareRollup.latestCompletedAt !== null &&
+        compareRollup.latestCompletedAt > ownLatestRun.completedAt) ||
+      (allContendersFailed && ownLatestRun.status !== "failed") ||
+      (anyContenderReady && ownLatestRun.status === "failed"))
+      ? {
+          runId: ownLatestRun?.runId ?? (`compare:${thread.id}` as RunId),
+          status: allContendersFailed ? "failed" : "completed",
+          requestedAt: ownLatestRun?.requestedAt ?? compareRollup.latestCompletedAt ?? updatedAt,
+          startedAt: ownLatestRun?.startedAt ?? compareRollup.latestCompletedAt ?? updatedAt,
+          completedAt: compareRollup.latestCompletedAt ?? ownLatestRun?.completedAt ?? updatedAt,
+          assistantMessageId: null,
+        }
+      : ownLatestRun;
   return {
     environmentId,
     id: thread.id,
@@ -318,6 +394,8 @@ export function presentThreadShell(
     branchPullRequest: thread.branchPullRequest ?? null,
     issues: thread.issues ?? [],
     lineage: thread.lineage,
+    compare: thread.compare ?? null,
+    compareRollup,
     forkedFrom: thread.forkedFrom,
     linkOrigin: thread.linkOrigin ?? null,
     delegatedFrom: thread.delegatedFrom ?? null,

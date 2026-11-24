@@ -763,6 +763,93 @@ describe("v2 thread shell lists", () => {
       harness.registry.dispose();
     }
   });
+
+  it("hides compare contenders and rolls up active state and approvals to the host shell", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const hostId = ThreadId.make("compare-host");
+    const c1Id = ThreadId.make("compare-c1");
+    const c2Id = ThreadId.make("compare-c2");
+    const host: OrchestrationV2ThreadShell = {
+      ...v2ThreadShell,
+      id: hostId,
+      title: "Compare host",
+      status: "idle",
+      activeRunId: null,
+      latestRunId: null,
+      compare: {
+        contenderThreadIds: [c1Id, c2Id],
+        sourceRunId: null,
+        selectedWinnerThreadId: null,
+      },
+    };
+    const c1: OrchestrationV2ThreadShell = {
+      ...v2ThreadShell,
+      id: c1Id,
+      title: "Compare host",
+      status: "running",
+      activeRunId: RunId.make("run-c1"),
+      lineage: {
+        rootThreadId: hostId,
+        parentThreadId: hostId,
+        relationshipToParent: "fork",
+        compare: true,
+      },
+      pendingRuntimeRequest: {
+        id: RuntimeRequestId.make("req-c1"),
+        kind: "command",
+        createdAt: v2Now,
+      },
+    };
+    const c2: OrchestrationV2ThreadShell = {
+      ...v2ThreadShell,
+      id: c2Id,
+      title: "Compare host",
+      status: "idle",
+      activeRunId: null,
+      latestRunId: RunId.make("run-c2"),
+      lineage: {
+        rootThreadId: hostId,
+        parentThreadId: hostId,
+        relationshipToParent: "fork",
+        compare: true,
+      },
+    };
+    registry.set(snapshotAtom(environmentId), {
+      ...v2ShellSnapshot,
+      threads: [host, c1, c2],
+    });
+    const disposeNav = registry.mount(threads.navigationThreadShellsAtom);
+    const disposeHost = registry.mount(
+      threads.threadShellAtom({ environmentId, threadId: hostId }),
+    );
+    const disposeChildInputs = registry.mount(
+      threads.childThreadInputsAtom({ environmentId, threadId: hostId }),
+    );
+    try {
+      expect(registry.get(threads.navigationThreadShellsAtom).map((shell) => shell.id)).toEqual([
+        hostId,
+      ]);
+      const hostShell = registry.get(threads.threadShellAtom({ environmentId, threadId: hostId }));
+      expect(hostShell?.compareRollup).toMatchObject({
+        totalCount: 2,
+        activeCount: 1,
+        readyCount: 1,
+        needsAttentionCount: 1,
+      });
+      expect(hostShell?.runtime?.status).toBe("running");
+      expect(hostShell?.pendingSubagentRequest).toBe("approval");
+      const childInputs = registry.get(
+        threads.childThreadInputsAtom({ environmentId, threadId: hostId }),
+      );
+      expect(childInputs.map((child) => child.id)).toEqual([c1Id]);
+      expect(childThreadInputsTitle(childInputs)).toBe("Model needs approval");
+    } finally {
+      disposeChildInputs();
+      disposeHost();
+      disposeNav();
+      registry.dispose();
+    }
+  });
 });
 
 describe("resolveListedAncestorThreadRef", () => {

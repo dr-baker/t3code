@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 import {
+  ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
   type EnvironmentId,
   type OrchestrationV2ShellSnapshot,
@@ -17,6 +18,7 @@ import {
   createAtomCommandScheduler,
   createEnvironmentCommand,
   createEnvironmentRpcCommand,
+  createGuardedEnvironmentCommand,
   environmentConnectionAtom,
 } from "./runtime.ts";
 import { waitForTitleRegenerationOutcome } from "./threadTitleRegeneration.ts";
@@ -30,11 +32,16 @@ import {
   createThread,
   deleteThread,
   editQueuedRun,
+  dropCompareContender,
   interruptThreadTurn,
   forkSideChat,
   forkThreadFromRun,
   markThreadUnread,
   mergeThreadBack,
+  pickCompareWinner,
+  popOutCompareContender,
+  startCompare,
+  undoComparePick,
   promoteQueuedRun,
   resumeThreadQueue,
   retryWorkspacePreparation,
@@ -423,6 +430,49 @@ export function createThreadEnvironmentAtoms<R, E>(
         mode: "serial",
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.sourceThreadId]),
       },
+    }),
+    startCompare: createGuardedEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:start-compare",
+      tag: ORCHESTRATION_V2_WS_METHODS.startCompare,
+      execute: startCompare,
+      scheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.hostThreadId ?? input.commandId ?? "new"]),
+      },
+    }),
+    pickCompareWinner: createGuardedEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:pick-compare-winner",
+      tag: ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+      authInput: () => ({ type: "thread.compare.pick-winner" }),
+      execute: pickCompareWinner,
+      scheduler,
+      concurrency,
+    }),
+    undoComparePick: createGuardedEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:undo-compare-pick",
+      tag: ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+      authInput: () => ({ type: "thread.compare.undo-pick" }),
+      execute: undoComparePick,
+      scheduler,
+      concurrency,
+    }),
+    popOutCompareContender: createGuardedEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:pop-out-compare-contender",
+      tag: ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+      authInput: () => ({ type: "thread.compare.pop-out" }),
+      execute: popOutCompareContender,
+      scheduler,
+      concurrency,
+    }),
+    dropCompareContender: createGuardedEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:drop-compare-contender",
+      tag: ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+      authInput: () => ({ type: "thread.compare.drop" }),
+      execute: dropCompareContender,
+      scheduler,
+      concurrency,
     }),
     mergeBack: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:merge-back",

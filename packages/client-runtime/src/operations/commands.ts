@@ -15,6 +15,7 @@ import {
   type NodeId,
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
+  type OrchestrationV2StartCompareInput,
   type PlanId,
   type ProjectId,
   type ProjectIconOverride,
@@ -26,7 +27,7 @@ import {
   type RunId,
   type RuntimeMode,
   type RuntimeRequestId,
-  type ThreadId,
+  ThreadId,
   type ThreadEnvMode,
   type UploadChatAttachment,
   type GuestMessageId,
@@ -47,6 +48,7 @@ import {
   getInitialServerConfig,
   isRpcClientError,
   request,
+  requestGuarded,
 } from "../rpc/client.ts";
 import { repositoryCheckpointScopeIds } from "../state/threadRepositories.ts";
 
@@ -1314,6 +1316,148 @@ export const unlinkThreadPullRequest = Effect.fn("EnvironmentCommands.unlinkThre
       ...input,
       type: "thread.pull-request.unlink",
       commandId: yield* allocateCommandId(input),
+    });
+  },
+);
+
+export type StartCompareInput =
+  | (Omit<
+      Extract<OrchestrationV2StartCompareInput, { readonly mode: "new" }>,
+      "commandId" | "initialMessage"
+    > &
+      CommandMetadata & {
+        readonly initialMessage: {
+          readonly messageId: MessageId;
+          readonly text: string;
+          readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
+          readonly attachments: ReadonlyArray<ChatAttachment | UploadChatAttachment>;
+        };
+      })
+  | (Omit<
+      Extract<OrchestrationV2StartCompareInput, { readonly mode: "fork" }>,
+      "commandId" | "initialMessage"
+    > &
+      CommandMetadata & {
+        readonly initialMessage?: {
+          readonly messageId: MessageId;
+          readonly text: string;
+          readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
+          readonly attachments: ReadonlyArray<ChatAttachment | UploadChatAttachment>;
+        };
+      });
+
+export const startCompare = Effect.fn("EnvironmentCommands.startCompare")(function* (
+  input: StartCompareInput,
+) {
+  const commandId = yield* allocateCommandId(input);
+  const hostThreadId = input.hostThreadId ?? ThreadId.make(`compare:${commandId.slice(-12)}`);
+  const initialMessage =
+    input.initialMessage === undefined
+      ? undefined
+      : yield* Effect.gen(function* () {
+          const attachments = yield* persistAttachments(
+            hostThreadId,
+            input.initialMessage!.messageId,
+            input.initialMessage!.attachments,
+          );
+          const context = remapComposerContextAttachments(
+            input.initialMessage!.context,
+            input.initialMessage!.attachments,
+            attachments,
+          );
+          return {
+            messageId: input.initialMessage!.messageId,
+            text: input.initialMessage!.text,
+            ...(context === undefined ? {} : { context }),
+            attachments,
+          };
+        });
+  if (input.mode === "new") {
+    return yield* requestGuarded(ORCHESTRATION_V2_WS_METHODS.startCompare, {
+      mode: "new",
+      commandId,
+      ...(input.creationSource === undefined ? {} : { creationSource: input.creationSource }),
+      hostThreadId,
+      projectId: input.projectId,
+      title: input.title,
+      ...(input.generateTitle === undefined ? {} : { generateTitle: input.generateTitle }),
+      contenders: input.contenders,
+      runtimeMode: input.runtimeMode,
+      interactionMode: input.interactionMode,
+      workspaceStrategy: input.workspaceStrategy,
+      initialMessage: initialMessage!,
+    });
+  }
+  return yield* requestGuarded(ORCHESTRATION_V2_WS_METHODS.startCompare, {
+    mode: "fork",
+    commandId,
+    ...(input.creationSource === undefined ? {} : { creationSource: input.creationSource }),
+    hostThreadId: input.hostThreadId,
+    sourceRunId: input.sourceRunId,
+    contenders: input.contenders,
+    workspaceStrategy: input.workspaceStrategy,
+    ...(initialMessage === undefined ? {} : { initialMessage }),
+  });
+});
+
+export type PickCompareWinnerInput = {
+  readonly threadId: ThreadId;
+  readonly winnerThreadId: ThreadId;
+} & CommandMetadata;
+
+export const pickCompareWinner = Effect.fn("EnvironmentCommands.pickCompareWinner")(function* (
+  input: PickCompareWinnerInput,
+) {
+  return yield* dispatch({
+    type: "thread.compare.pick-winner",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    winnerThreadId: input.winnerThreadId,
+  });
+});
+
+export type UndoComparePickInput = {
+  readonly threadId: ThreadId;
+} & CommandMetadata;
+
+export const undoComparePick = Effect.fn("EnvironmentCommands.undoComparePick")(function* (
+  input: UndoComparePickInput,
+) {
+  return yield* dispatch({
+    type: "thread.compare.undo-pick",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+  });
+});
+
+export type PopOutCompareContenderInput = {
+  readonly threadId: ThreadId;
+  readonly contenderThreadId: ThreadId;
+} & CommandMetadata;
+
+export const popOutCompareContender = Effect.fn("EnvironmentCommands.popOutCompareContender")(
+  function* (input: PopOutCompareContenderInput) {
+    return yield* dispatch({
+      type: "thread.compare.pop-out",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      contenderThreadId: input.contenderThreadId,
+    });
+  },
+);
+
+export type DropCompareContenderInput = {
+  readonly threadId: ThreadId;
+  readonly contenderThreadId: ThreadId;
+} & CommandMetadata;
+
+export const dropCompareContender = Effect.fn("EnvironmentCommands.dropCompareContender")(
+  function* (input: DropCompareContenderInput) {
+    return yield* dispatch({
+      type: "thread.compare.drop",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      contenderThreadId: input.contenderThreadId,
     });
   },
 );
