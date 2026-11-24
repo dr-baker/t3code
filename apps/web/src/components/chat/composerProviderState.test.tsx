@@ -7,7 +7,7 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import { getComposerProviderState, getComposerReasoningStep } from "./composerProviderState";
-import { readPromptUltrathink } from "./TraitsPicker";
+import { getTraitsSectionVisibility, readPromptUltrathink } from "./TraitsPicker";
 
 const PROVIDER: ProviderDriverKind = ProviderDriverKind.make("codex");
 const MODEL = "test-model";
@@ -347,13 +347,22 @@ describe("getComposerReasoningStep", () => {
         booleanDescriptor("fastMode", true),
       ]),
     };
+    const explicitFast = selections(["fastMode", true]);
+
+    expect(
+      getTraitsSectionVisibility({ ...cursor, model: MODEL }).fastModeDescriptor,
+    ).toMatchObject({ currentValue: false });
+    expect(
+      getTraitsSectionVisibility({ ...cursor, model: MODEL, modelOptions: explicitFast })
+        .fastModeDescriptor,
+    ).toMatchObject({ currentValue: true });
 
     expect(step({ ...cursor, modelOptions: undefined })?.modelOptions).toStrictEqual(
       selections(["reasoning_effort", "high"], ["fastMode", false]),
     );
-    expect(
-      step({ ...cursor, modelOptions: selections(["fastMode", true]) })?.modelOptions,
-    ).toStrictEqual(selections(["reasoning_effort", "high"], ["fastMode", true]));
+    expect(step({ ...cursor, modelOptions: explicitFast })?.modelOptions).toStrictEqual(
+      selections(["reasoning_effort", "high"], ["fastMode", true]),
+    );
   });
 
   it("steps from the provider-reported level for the same instance and model", () => {
