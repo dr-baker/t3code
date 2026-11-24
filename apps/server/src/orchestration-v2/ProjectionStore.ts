@@ -1378,6 +1378,7 @@ const shellIndexLineage = (row: {
   readonly parent_thread_id: string | null;
   readonly root_thread_id: string;
   readonly side_chat: number | null;
+  readonly compare?: number | null;
 }): OrchestrationV2ThreadShell["lineage"] => ({
   parentThreadId: row.parent_thread_id === null ? null : ThreadId.make(row.parent_thread_id),
   relationshipToParent:
@@ -1386,6 +1387,7 @@ const shellIndexLineage = (row: {
       : null,
   rootThreadId: ThreadId.make(row.root_thread_id),
   ...(row.side_chat === null ? {} : { sideChat: row.side_chat === 1 }),
+  ...(row.compare === 1 ? { compare: true as const } : {}),
 });
 
 const encodeIdList = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
@@ -1994,6 +1996,7 @@ export function threadShellFromProjection(
       ? {}
       : { activeOrderKey: projection.thread.activeOrderKey }),
     lineage: projection.thread.lineage,
+    ...(projection.thread.compare === undefined ? {} : { compare: projection.thread.compare }),
     forkedFrom: projection.thread.forkedFrom,
     activeProviderThreadId: projection.thread.activeProviderThreadId,
     ...(projection.thread.historyOrigin === undefined
@@ -2309,6 +2312,7 @@ function shellFromState(input: {
       ? {}
       : { activeOrderKey: input.state.thread.activeOrderKey }),
     lineage: input.state.thread.lineage,
+    ...(input.state.thread.compare === undefined ? {} : { compare: input.state.thread.compare }),
     forkedFrom: input.state.thread.forkedFrom,
     activeProviderThreadId: input.state.thread.activeProviderThreadId,
     ...(input.state.thread.historyOrigin === undefined
@@ -7034,7 +7038,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           WHERE thread.thread_id = ${threadId}
             AND json_extract(message.value, '$.status') = 'pending'
         `;
-        return [
+        const candidateIds = [
           ...new Set([
             ...(yield* unshownRunAttachmentIds(
               threadId,
@@ -7045,6 +7049,26 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ...released.flat(),
           ]),
         ];
+        if (options?.includeShownByLiveFork || candidateIds.length === 0) {
+          return candidateIds;
+        }
+        // Contenders started from a shared attachment may reference the same file id.
+        // Keep any file still referenced by another live thread's messages.
+        const sharedByLiveSibling = yield* sql<{ id: string }>`
+          SELECT DISTINCT json_extract(attachment.value, '$.id') AS id
+          FROM orchestration_v2_projection_messages AS message
+          JOIN orchestration_v2_projection_threads AS thread
+            ON thread.thread_id = message.thread_id
+          CROSS JOIN json_each(message.payload_json, '$.attachments') AS attachment
+          WHERE thread.deleted_at IS NULL
+            AND message.thread_id != ${threadId}
+            AND json_extract(attachment.value, '$.id') IN (
+              SELECT value FROM json_each(${encodeIdList(candidateIds)})
+            )
+        `;
+        if (sharedByLiveSibling.length === 0) return candidateIds;
+        const retainedBySiblings = new Set(sharedByLiveSibling.map((row) => row.id));
+        return candidateIds.filter((id) => !retainedBySiblings.has(id));
       },
       (effect, threadId) =>
         effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
@@ -7108,6 +7132,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           readonly parent_thread_id: string | null;
           readonly relationship_to_parent: string | null;
           readonly side_chat: number | null;
+          readonly compare: number | null;
           readonly delegated_from_thread_id: string | null;
         }>`
           SELECT
@@ -7115,6 +7140,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             json_extract(payload_json, '$.lineage.parentThreadId') AS parent_thread_id,
             json_extract(payload_json, '$.lineage.relationshipToParent') AS relationship_to_parent,
             json_extract(payload_json, '$.lineage.sideChat') AS side_chat,
+            json_extract(payload_json, '$.lineage.compare') AS compare,
             json_extract(payload_json, '$.delegatedFrom.threadId') AS delegated_from_thread_id
           FROM orchestration_v2_projection_threads
           WHERE deleted_at IS NULL
@@ -7141,7 +7167,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           const childId = ThreadId.make(row.thread_id);
           liveInFamily.add(childId);
           if (childId === threadId) continue;
-          if (row.side_chat === 1 && row.parent_thread_id !== null) {
+          if ((row.side_chat === 1 || row.compare === 1) && row.parent_thread_id !== null) {
             addOwnedEdge(ThreadId.make(row.parent_thread_id), childId, "side_chat");
           } else if (row.relationship_to_parent === "subagent" && row.parent_thread_id !== null) {
             addOwnedEdge(ThreadId.make(row.parent_thread_id), childId, "subagent");
@@ -9866,6 +9892,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly parent_thread_id: string | null;
         readonly root_thread_id: string;
         readonly side_chat: number | null;
+        readonly compare: number | null;
         readonly settled_override: string | null;
         readonly settled_at: string | null;
         readonly pinned_at: string | null;
@@ -9881,6 +9908,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ${indexedField("$.lineage.parentThreadId")} AS parent_thread_id,
           ${indexedField("$.lineage.rootThreadId")} AS root_thread_id,
           ${indexedField("$.lineage.sideChat")} AS side_chat,
+          json_extract(t.payload_json, '$.lineage.compare') AS compare,
           ${indexedField("$.settledOverride")} AS settled_override,
           ${indexedField("$.settledAt")} AS settled_at,
           ${indexedField("$.pinnedAt")} AS pinned_at,
@@ -9967,6 +9995,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly parent_thread_id: string | null;
         readonly root_thread_id: string;
         readonly side_chat: number | null;
+        readonly compare: number | null;
         readonly delegated_from_environment_id: string | null;
         readonly delegated_from_thread_id: string | null;
         readonly delegated_from_title: string | null;
@@ -9983,6 +10012,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           json_extract(t.payload_json, '$.lineage.parentThreadId') AS parent_thread_id,
           json_extract(t.payload_json, '$.lineage.rootThreadId') AS root_thread_id,
           json_extract(t.payload_json, '$.lineage.sideChat') AS side_chat,
+          json_extract(t.payload_json, '$.lineage.compare') AS compare,
           json_extract(t.payload_json, '$.delegatedFrom.environmentId') AS delegated_from_environment_id,
           json_extract(t.payload_json, '$.delegatedFrom.threadId') AS delegated_from_thread_id,
           json_extract(t.payload_json, '$.delegatedFrom.title') AS delegated_from_title,
@@ -10071,6 +10101,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           AND t.archived_at IS NULL
           AND json_extract(t.payload_json, '$.lineage.relationshipToParent') IS NOT 'subagent'
           AND json_extract(t.payload_json, '$.lineage.sideChat') IS NOT 1
+          AND json_extract(t.payload_json, '$.lineage.compare') IS NOT 1
           AND json_extract(t.payload_json, '$.settledOverride') = 'settled'
           AND json_extract(t.payload_json, '$.settledAt') IS NOT NULL${
             projectIds === undefined ? sql`` : sql` AND t.project_id IN ${sql.in(projectIds)}`

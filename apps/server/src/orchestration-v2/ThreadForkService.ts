@@ -1,5 +1,6 @@
 import {
   ContextTransferId,
+  type ModelSelection,
   OrchestrationV2Actor,
   OrchestrationV2AppThread,
   OrchestrationV2ContextSourcePoint,
@@ -61,6 +62,9 @@ export interface ThreadForkServiceV2Shape {
     readonly title?: string;
     readonly sideChat?: boolean;
     readonly rewrite?: true;
+    readonly compare?: true;
+    readonly modelSelection?: ModelSelection;
+    readonly clearWorktree?: boolean;
     readonly createdBy: OrchestrationV2Actor;
     readonly creationSource: OrchestrationV2CreationSource;
     readonly createdAt: DateTime.Utc;
@@ -80,8 +84,9 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
       const sourceLineage = input.sourceProjection.thread.lineage;
       // A task a linked environment delegated here is a subagent of a remote thread.
       if (
-        input.sideChat &&
+        (input.sideChat || input.compare) &&
         (sourceLineage.sideChat ||
+          sourceLineage.compare ||
           sourceLineage.relationshipToParent === "subagent" ||
           input.sourceProjection.thread.delegatedFrom !== undefined)
       ) {
@@ -89,8 +94,14 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           sourceThreadId: input.sourceProjection.thread.id,
           targetThreadId: input.targetThreadId,
           cause: sourceLineage.sideChat
-            ? "A side chat cannot start another side chat."
-            : "A subagent cannot start a side chat.",
+            ? input.sideChat
+              ? "A side chat cannot start another side chat."
+              : "A side chat cannot start a model comparison."
+            : sourceLineage.compare
+              ? "A compare contender cannot start a nested child thread."
+              : input.sideChat
+                ? "A subagent cannot start a side chat."
+                : "A subagent cannot start a model comparison.",
         });
       }
       if (sourceRun !== null && !isForkableSourceRunStatus(sourceRun.status)) {
@@ -101,9 +112,17 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
         });
       }
       // The remote parent delegated the source thread, not its forks.
-      const { delegatedFrom: _delegatedFrom, ...inherited } = input.sourceProjection.thread;
+      const {
+        delegatedFrom: _delegatedFrom,
+        compare: _compare,
+        ...inherited
+      } = input.sourceProjection.thread;
+      const targetModelSelection = input.modelSelection ?? inherited.modelSelection;
       const targetThread: OrchestrationV2AppThread = {
         ...inherited,
+        providerInstanceId: targetModelSelection.instanceId,
+        modelSelection: targetModelSelection,
+        ...(input.clearWorktree ? { worktreePath: null } : {}),
         ...(input.rewrite ? { interactionMode: "default" as const } : {}),
         // PR context follows the conversation; watching remains the source thread's responsibility.
         pullRequests: input.sourceProjection.thread.pullRequests?.map(
@@ -124,6 +143,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           rootThreadId: input.sourceProjection.thread.lineage.rootThreadId,
           ...(input.sideChat ? { sideChat: true } : {}),
           ...(input.rewrite ? { rewrite: true } : {}),
+          ...(input.compare ? { compare: true } : {}),
         },
         forkedFrom:
           sourceRun === null
