@@ -21,6 +21,7 @@ import {
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
   normalizeModelSlug,
+  withImplicitFastModeDefault,
 } from "@t3tools/shared/model";
 import { msg, T, useMessages } from "gt-react";
 import { memo } from "react";
@@ -139,7 +140,7 @@ function getSelectedTraits(
       )
     : getProviderOptionDescriptors({
         caps,
-        selections: modelOptions,
+        selections: withImplicitFastModeDefault(caps, modelOptions),
       });
   const selectDescriptors = descriptors.filter(
     (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
@@ -240,11 +241,6 @@ export function getTraitsSectionVisibility(input: {
   };
 }
 
-/**
- * `modelOptions` must already carry the composer's implicit defaults (see
- * `withImplicitFastModeDefault`) so the persisted selection matches what the
- * picker would write.
- */
 export function getReasoningTraitStep(input: {
   provider: ProviderDriverKind;
   instanceId: ProviderInstanceId;
