@@ -1,11 +1,14 @@
 import { useAtomMount, useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
+  type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
+import {
+  threadRuntimeIsActive,
+  type EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
 import {
   AuthOrchestrationOperateScope,
   isActiveCompareHost,
@@ -26,7 +29,7 @@ import {
   TerminalIcon,
   XIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { ComposerHandleContext } from "../../composerHandleContext";
@@ -55,14 +58,91 @@ import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ChatHeader } from "./ChatHeader";
+import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { RewriteProviderIcon, resolveRewriteModelDisplay } from "./Rewrites";
 import { ThreadVisitWatermark } from "./ThreadVisitWatermark";
 import {
+  CompareColumnContext,
   resolveFocusedContenderId,
   summarizeCompareContenders,
   type CompareBroadcastControl,
   type CompareBroadcastPayload,
 } from "./compareThread.logic";
+
+function ContenderStatusBadge(props: { readonly shell: EnvironmentThreadShell | null }) {
+  const gt = useGT();
+  const { shell } = props;
+  if (!shell) return null;
+  if (shell.hasPendingApprovals || shell.pendingSubagentRequest === "approval") {
+    return (
+      <Badge size="sm" variant="warning">
+        <T>Approval</T>
+      </Badge>
+    );
+  }
+  if (shell.hasPendingUserInput || shell.pendingSubagentRequest === "user_input") {
+    return (
+      <Badge size="sm" variant="warning">
+        <T>Input</T>
+      </Badge>
+    );
+  }
+  if (shell.latestRun?.status === "failed") {
+    return (
+      <Badge size="sm" variant="error">
+        <T>Failed</T>
+      </Badge>
+    );
+  }
+  if (threadRuntimeIsActive(shell.runtime)) {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 text-2xs text-muted-foreground">
+        <Spinner size="xs" />
+        {shell.runtime?.status === "preparing" ? gt("Setup") : gt("Running")}
+      </span>
+    );
+  }
+  if (shell.latestRun !== null) {
+    return (
+      <Badge size="sm" variant="secondary">
+        <T>Ready</T>
+      </Badge>
+    );
+  }
+  return null;
+}
+
+function HeaderTooltipButton(props: {
+  readonly label: string;
+  readonly tooltip: ReactNode;
+  readonly active?: boolean;
+  readonly disabled?: boolean;
+  readonly testId?: string;
+  readonly size?: "xs" | "icon-xs";
+  readonly variant?: "outline" | "ghost" | "ghost-muted" | "secondary";
+  readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  readonly children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            size={props.size ?? "icon-xs"}
+            variant={props.variant ?? (props.active ? "secondary" : "ghost-muted")}
+            data-testid={props.testId}
+            aria-label={props.label}
+            disabled={props.disabled}
+            onClick={props.onClick}
+          />
+        }
+      >
+        {props.children}
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">{props.tooltip}</TooltipPopup>
+    </Tooltip>
+  );
+}
 
 interface CompareContenderColumnProps {
   readonly environmentId: EnvironmentId;
@@ -110,31 +190,22 @@ function CompareContenderColumn(props: CompareContenderColumnProps) {
     gitCwd !== null && (shell?.worktreePath !== null || shell?.branch !== null);
   useAtomMount(vcsStatusRevalidation(tracksGitStatus ? { environmentId, cwd: gitCwd } : null));
   const vcsStatus = useEnvironmentQuery(
-    tracksGitStatus
-      ? vcsEnvironment.status({
-          environmentId,
-          input: { cwd: gitCwd },
-        })
-      : null,
+    tracksGitStatus ? vcsEnvironment.status({ environmentId, input: { cwd: gitCwd } }) : null,
   );
   const workingTree = vcsStatus.data?.workingTree;
-  const hasDiffStats =
+  const diffStat = workingTree
+    ? { additions: workingTree.insertions, deletions: workingTree.deletions }
+    : null;
+  const showDiffBadge =
     workingTree !== undefined &&
-    (workingTree.files.length > 0 || workingTree.insertions > 0 || workingTree.deletions > 0);
+    diffStat !== null &&
+    (workingTree.files.length > 0 || hasNonZeroStat(diffStat));
   const display = shell ? resolveRewriteModelDisplay(shell.modelSelection, providers) : null;
-  const isActive = threadRuntimeIsActive(shell?.runtime);
-  const needsApproval = shell?.hasPendingApprovals === true;
-  const needsInput = shell?.hasPendingUserInput === true;
-  const isFailed = shell?.latestRun?.status === "failed";
 
   const embeddedPanel: SideChatParentPanel = {
     hostRef,
-    openToolDiff: () => {
-      onOpenDiff(contenderId);
-    },
-    runShellCommand: () => {
-      onFocus(contenderId);
-    },
+    openToolDiff: () => onOpenDiff(contenderId),
+    runShellCommand: () => onFocus(contenderId),
   };
 
   return (
@@ -166,28 +237,7 @@ function CompareContenderColumn(props: CompareContenderColumnProps) {
               <span className="truncate text-xs font-medium text-foreground">
                 {display?.modelLabel ?? shell?.modelSelection.model ?? gt("Loading…")}
               </span>
-              {needsApproval ? (
-                <Badge size="sm" variant="warning">
-                  <T>Approval</T>
-                </Badge>
-              ) : needsInput ? (
-                <Badge size="sm" variant="warning">
-                  <T>Input</T>
-                </Badge>
-              ) : isFailed ? (
-                <Badge size="sm" variant="error">
-                  <T>Failed</T>
-                </Badge>
-              ) : isActive ? (
-                <span className="inline-flex shrink-0 items-center gap-1 text-2xs text-muted-foreground">
-                  <Spinner size="xs" />
-                  {shell?.runtime?.status === "preparing" ? gt("Setup") : gt("Running")}
-                </span>
-              ) : shell?.latestRun !== null ? (
-                <Badge size="sm" variant="secondary">
-                  <T>Ready</T>
-                </Badge>
-              ) : null}
+              <ContenderStatusBadge shell={shell} />
             </div>
             {display?.subtitle ? (
               <p className="truncate text-2xs leading-tight text-muted-foreground">
@@ -197,119 +247,86 @@ function CompareContenderColumn(props: CompareContenderColumnProps) {
           </div>
         </div>
 
-        {hasDiffStats && workingTree ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  data-testid="compare-contender-diff-badge"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onOpenDiff(contenderId);
-                  }}
-                />
-              }
-            >
-              <span className="inline-flex items-center gap-1 font-mono text-2xs tabular-nums">
-                <span className="text-diff-addition-foreground">
-                  +{formatDiffCount(workingTree.insertions)}
-                </span>
-                <span className="text-diff-deletion-foreground">
-                  -{formatDiffCount(workingTree.deletions)}
-                </span>
-              </span>
-            </TooltipTrigger>
-            <TooltipPopup side="bottom">
-              <T>Inspect this model&apos;s changes in the diff panel</T>
-            </TooltipPopup>
-          </Tooltip>
+        {showDiffBadge && diffStat ? (
+          <HeaderTooltipButton
+            size="xs"
+            variant="ghost"
+            testId="compare-contender-diff-badge"
+            label={gt("Inspect this model's changes in the diff panel")}
+            tooltip={<T>Inspect this model&apos;s changes in the diff panel</T>}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenDiff(contenderId);
+            }}
+          >
+            <DiffStatLabel
+              layout="inline"
+              additions={diffStat.additions}
+              deletions={diffStat.deletions}
+              className="text-2xs"
+            />
+          </HeaderTooltipButton>
         ) : null}
 
         <div className="flex shrink-0 items-center gap-0.5">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  size="xs"
-                  variant="outline"
-                  data-testid="compare-pick-winner"
-                  disabled={!canOperate || busyAction}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onPickWinner(contenderId);
-                  }}
-                />
-              }
-            >
-              <CheckIcon className="size-3" />
-              <T>Pick</T>
-            </TooltipTrigger>
-            <TooltipPopup side="bottom">
-              <T>Pick winner: promote to sidebar and settle the others</T>
-            </TooltipPopup>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  size="icon-xs"
-                  variant="ghost-muted"
-                  data-testid="compare-pop-out"
-                  aria-label={gt("Pop out as standalone thread")}
-                  disabled={!canOperate || busyAction}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onPopOut(contenderId);
-                  }}
-                />
-              }
-            >
-              <ArrowUpRightIcon className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipPopup side="bottom">
-              <T>Pop out into its own sidebar thread</T>
-            </TooltipPopup>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  size="icon-xs"
-                  variant="ghost-muted"
-                  data-testid="compare-drop-contender"
-                  aria-label={gt("Remove from comparison")}
-                  disabled={!canOperate || busyAction}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDrop(contenderId);
-                  }}
-                />
-              }
-            >
-              <XIcon className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipPopup side="bottom">
-              <T>Drop model from comparison</T>
-            </TooltipPopup>
-          </Tooltip>
+          <HeaderTooltipButton
+            size="xs"
+            variant="outline"
+            testId="compare-pick-winner"
+            label={gt("Pick")}
+            disabled={!canOperate || busyAction}
+            tooltip={<T>Pick winner: promote to sidebar and settle the others</T>}
+            onClick={(event) => {
+              event.stopPropagation();
+              onPickWinner(contenderId);
+            }}
+          >
+            <CheckIcon className="size-3" />
+            <T>Pick</T>
+          </HeaderTooltipButton>
+          <HeaderTooltipButton
+            testId="compare-pop-out"
+            label={gt("Pop out as standalone thread")}
+            disabled={!canOperate || busyAction}
+            tooltip={<T>Pop out into its own sidebar thread</T>}
+            onClick={(event) => {
+              event.stopPropagation();
+              onPopOut(contenderId);
+            }}
+          >
+            <ArrowUpRightIcon className="size-3.5" />
+          </HeaderTooltipButton>
+          <HeaderTooltipButton
+            testId="compare-drop-contender"
+            label={gt("Remove from comparison")}
+            disabled={!canOperate || busyAction}
+            tooltip={<T>Drop model from comparison</T>}
+            onClick={(event) => {
+              event.stopPropagation();
+              onDrop(contenderId);
+            }}
+          >
+            <XIcon className="size-3.5" />
+          </HeaderTooltipButton>
         </div>
       </header>
 
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <ComposerHandleContext value={null}>
-          <ChatView
-            key={contenderId}
-            environmentId={environmentId}
-            threadId={contenderId}
-            routeKind="server"
-            embedded={embeddedPanel}
-            rightPanelPortalTarget={focused ? rightPanelPortalTarget : null}
-            compareBroadcast={broadcastControl}
-          />
+          <CompareColumnContext
+            value={{
+              broadcast: broadcastControl,
+              rightPanelPortalTarget: focused ? rightPanelPortalTarget : null,
+            }}
+          >
+            <ChatView
+              key={contenderId}
+              environmentId={environmentId}
+              threadId={contenderId}
+              routeKind="server"
+              embedded={embeddedPanel}
+            />
+          </CompareColumnContext>
         </ComposerHandleContext>
       </div>
     </section>
@@ -351,11 +368,15 @@ export function CompareThreadView(props: {
   const focusedContenderRef: ScopedThreadRef | null = focusedContenderId
     ? scopeThreadRef(environmentId, focusedContenderId)
     : null;
-
   const activeRightPanelKind = useRightPanelStore((state) =>
     focusedContenderRef ? selectActiveRightPanel(state.byThreadKey, focusedContenderRef) : null,
   );
-  const rightPanelOpen = activeRightPanelKind !== null;
+
+  const openThread = (targetId: ThreadId) =>
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(scopeThreadRef(environmentId, targetId)),
+    });
 
   // Keep the single right panel tracking the focused contender without ghost-reopening closed panels.
   const handleFocusContender = (nextId: ThreadId) => {
@@ -365,9 +386,7 @@ export function CompareThreadView(props: {
     const prevKind = prevRef ? selectActiveRightPanel(store.byThreadKey, prevRef) : null;
     const nextRef = scopeThreadRef(environmentId, nextId);
     setFocusedState(nextId);
-    if (prevRef !== null && prevKind !== null) {
-      store.close(prevRef);
-    }
+    if (prevRef !== null && prevKind !== null) store.close(prevRef);
     if (prevKind === "diff" || prevKind === "files" || prevKind === "pull-requests") {
       store.open(nextRef, prevKind);
     } else if (prevKind === null) {
@@ -375,17 +394,14 @@ export function CompareThreadView(props: {
     }
   };
 
-  const handleOpenContenderPanel = (contenderId: ThreadId, kind: "diff" | "files") => {
+  const handleOpenDiff = (contenderId: ThreadId) => {
     const store = useRightPanelStore.getState();
     if (focusedContenderId && focusedContenderId !== contenderId) {
       store.close(scopeThreadRef(environmentId, focusedContenderId));
     }
-    const nextRef = scopeThreadRef(environmentId, contenderId);
     setFocusedState(contenderId);
-    store.open(nextRef, kind);
+    store.open(scopeThreadRef(environmentId, contenderId), "diff");
   };
-
-  const handleOpenDiff = (contenderId: ThreadId) => handleOpenContenderPanel(contenderId, "diff");
 
   const handleBroadcast = async (payload: CompareBroadcastPayload): Promise<boolean> => {
     const text = payload.text.trim();
@@ -396,12 +412,7 @@ export function CompareThreadView(props: {
           environmentId,
           input: {
             threadId: contenderId,
-            message: {
-              messageId: newMessageId(),
-              role: "user",
-              text,
-              attachments: [],
-            },
+            message: { messageId: newMessageId(), role: "user", text, attachments: [] },
             runtimeMode: hostShell?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
             interactionMode: hostShell?.interactionMode ?? DEFAULT_INTERACTION_MODE,
             dispatchMode: "auto",
@@ -411,10 +422,7 @@ export function CompareThreadView(props: {
     );
     const failures = results.filter((result) => result._tag === "Failure");
     if (failures.length === results.length) {
-      toastManager.add({
-        type: "error",
-        title: gt("Could not send to models"),
-      });
+      toastManager.add({ type: "error", title: gt("Could not send to models") });
       return false;
     }
     if (failures.length > 0) {
@@ -429,151 +437,146 @@ export function CompareThreadView(props: {
     return true;
   };
 
-  const broadcastControl: CompareBroadcastControl = {
-    count: contenderIds.length,
-    onBroadcast: handleBroadcast,
-  };
-
-  const handlePickWinner = async (winnerThreadId: ThreadId) => {
+  const runCompareAction = async <A, E>(
+    run: () => Promise<AtomCommandResult<A, E>>,
+    errorTitle: string,
+    onSuccess?: () => void,
+  ) => {
     if (busyAction || !canOperate) return;
     setBusyAction(true);
-    const result = await pickWinner({
-      environmentId,
-      input: { threadId, winnerThreadId },
-    });
+    const result = await run();
     setBusyAction(false);
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         toastManager.add({
           type: "error",
-          title: gt("Could not pick winner"),
+          title: errorTitle,
           ...(error instanceof Error ? { description: error.message } : {}),
         });
       }
       return;
     }
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(scopeThreadRef(environmentId, winnerThreadId)),
-    });
-    toastManager.add({
-      type: "success",
-      title: gt("Picked winner. Other models settled."),
-      timeout: 6000,
-      actionProps: {
-        children: gt("Undo"),
-        onClick: () => {
-          void undoPick({ environmentId, input: { threadId } }).then((undoResult) => {
-            if (undoResult._tag !== "Success") return;
-            const hostAtom = environmentThreadShells.threadShellAtom(hostRef);
-            const openHost = () => {
-              void router.navigate({
-                to: "/$environmentId/$threadId",
-                params: buildThreadRouteParams(hostRef),
+    onSuccess?.();
+  };
+
+  const handlePickWinner = (winnerThreadId: ThreadId) =>
+    void runCompareAction(
+      () => pickWinner({ environmentId, input: { threadId, winnerThreadId } }),
+      gt("Could not pick winner"),
+      () => {
+        openThread(winnerThreadId);
+        toastManager.add({
+          type: "success",
+          title: gt("Picked winner. Other models settled."),
+          timeout: 6000,
+          actionProps: {
+            children: gt("Undo"),
+            onClick: () => {
+              void undoPick({ environmentId, input: { threadId } }).then((undoResult) => {
+                if (undoResult._tag !== "Success") return;
+                const hostAtom = environmentThreadShells.threadShellAtom(hostRef);
+                const navigateToHost = () =>
+                  void router.navigate({
+                    to: "/$environmentId/$threadId",
+                    params: buildThreadRouteParams(hostRef),
+                  });
+                if (isActiveCompareHost(appAtomRegistry.get(hostAtom))) {
+                  navigateToHost();
+                  return;
+                }
+                let done = false;
+                const finish = () => {
+                  if (done) return;
+                  done = true;
+                  unsubscribe();
+                  clearTimeout(fallbackTimer);
+                  navigateToHost();
+                };
+                const unsubscribe = appAtomRegistry.subscribe(hostAtom, (shell) => {
+                  if (isActiveCompareHost(shell)) finish();
+                });
+                const fallbackTimer = setTimeout(finish, 2000);
               });
-            };
-            if (isActiveCompareHost(appAtomRegistry.get(hostAtom))) {
-              openHost();
-              return;
-            }
-            let settled = false;
-            const finish = () => {
-              if (settled) return;
-              settled = true;
-              unsubscribe();
-              clearTimeout(fallbackTimer);
-              openHost();
-            };
-            const unsubscribe = appAtomRegistry.subscribe(hostAtom, (shell) => {
-              if (isActiveCompareHost(shell)) finish();
-            });
-            const fallbackTimer = setTimeout(finish, 2000);
-          });
-        },
-      },
-    });
-  };
-
-  const handlePopOut = async (contenderThreadId: ThreadId) => {
-    if (busyAction || !canOperate) return;
-    setBusyAction(true);
-    const result = await popOut({
-      environmentId,
-      input: { threadId, contenderThreadId },
-    });
-    setBusyAction(false);
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        toastManager.add({
-          type: "error",
-          title: gt("Could not pop out thread"),
-          ...(error instanceof Error ? { description: error.message } : {}),
+            },
+          },
         });
-      }
-      return;
-    }
-    if (contenderIds.length <= 1) {
-      void navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(scopeThreadRef(environmentId, contenderThreadId)),
-      });
-      return;
-    }
-    toastManager.add({
-      type: "info",
-      title: gt("Popped out to sidebar"),
-      actionProps: {
-        children: gt("Open"),
-        onClick: () =>
-          void navigate({
-            to: "/$environmentId/$threadId",
-            params: buildThreadRouteParams(scopeThreadRef(environmentId, contenderThreadId)),
-          }),
       },
-    });
-  };
+    );
 
-  const handleDrop = async (contenderThreadId: ThreadId) => {
-    if (busyAction || !canOperate) return;
-    setBusyAction(true);
-    const result = await dropContender({
-      environmentId,
-      input: { threadId, contenderThreadId },
-    });
-    setBusyAction(false);
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      const error = squashAtomCommandFailure(result);
-      toastManager.add({
-        type: "error",
-        title: gt("Could not remove model"),
-        ...(error instanceof Error ? { description: error.message } : {}),
-      });
-    }
-  };
+  const handlePopOut = (contenderThreadId: ThreadId) =>
+    void runCompareAction(
+      () => popOut({ environmentId, input: { threadId, contenderThreadId } }),
+      gt("Could not pop out thread"),
+      () => {
+        if (contenderIds.length <= 1) {
+          openThread(contenderThreadId);
+          return;
+        }
+        toastManager.add({
+          type: "info",
+          title: gt("Popped out to sidebar"),
+          actionProps: { children: gt("Open"), onClick: () => openThread(contenderThreadId) },
+        });
+      },
+    );
+
+  const handleDrop = (contenderThreadId: ThreadId) =>
+    void runCompareAction(
+      () => dropContender({ environmentId, input: { threadId, contenderThreadId } }),
+      gt("Could not remove model"),
+    );
 
   const rollup = hostShell?.compareRollup;
   const summary = rollup
-    ? {
-        total: rollup.totalCount,
-        active: rollup.activeCount,
-        ready: rollup.readyCount,
-        failed: rollup.failedCount,
-        needsAttention: rollup.needsAttentionCount,
-      }
+    ? { active: rollup.activeCount, ready: rollup.readyCount }
     : summarizeCompareContenders([]);
 
   const toggleFocusedPanel = (kind: "diff" | "files") => {
     if (!focusedContenderRef) return;
     const store = useRightPanelStore.getState();
-    const current = selectActiveRightPanel(store.byThreadKey, focusedContenderRef);
-    if (current === kind) {
+    if (selectActiveRightPanel(store.byThreadKey, focusedContenderRef) === kind) {
       store.close(focusedContenderRef);
     } else {
       store.open(focusedContenderRef, kind);
     }
   };
+
+  const panelButtons = focusedContenderRef
+    ? [
+        {
+          kind: "diff" as const,
+          label: gt("Toggle diff panel for focused model"),
+          tooltip: <T>Diff (focused model)</T>,
+          icon: <FileDiffIcon className="size-3.5" />,
+          onClick: () => toggleFocusedPanel("diff"),
+        },
+        {
+          kind: "files" as const,
+          label: gt("Toggle files panel for focused model"),
+          tooltip: <T>Files (focused model)</T>,
+          icon: <FolderTreeIcon className="size-3.5" />,
+          onClick: () => toggleFocusedPanel("files"),
+        },
+        {
+          kind: "terminal" as const,
+          label: gt("Open terminal for focused model"),
+          tooltip: <T>Terminal (focused model)</T>,
+          icon: <TerminalIcon className="size-3.5" />,
+          onClick: () =>
+            useRightPanelStore
+              .getState()
+              .openTerminal(focusedContenderRef, DEFAULT_THREAD_TERMINAL_ID),
+        },
+        {
+          kind: "preview" as const,
+          label: gt("Open browser for focused model"),
+          tooltip: <T>Browser (focused model)</T>,
+          icon: <GlobeIcon className="size-3.5" />,
+          onClick: () => useRightPanelStore.getState().openBrowser(focusedContenderRef, null),
+        },
+      ]
+    : [];
 
   return (
     <div
@@ -595,13 +598,8 @@ export function CompareThreadView(props: {
             isServerThread
             activeProject={project}
             parentThreadLink={null}
-            onOpenThread={(targetId) =>
-              void navigate({
-                to: "/$environmentId/$threadId",
-                params: buildThreadRouteParams(scopeThreadRef(environmentId, targetId)),
-              })
-            }
-            rightPanelOpen={rightPanelOpen}
+            onOpenThread={openThread}
+            rightPanelOpen={activeRightPanelKind !== null}
             onNewThreadInProject={() => {
               if (project) void handleNewThread({ environmentId, projectId: project.id });
             }}
@@ -624,82 +622,19 @@ export function CompareThreadView(props: {
             </span>
           </Badge>
 
-          {focusedContenderRef ? (
+          {panelButtons.length > 0 ? (
             <div className="flex items-center gap-0.5 border-l border-border/60 pl-1.5">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="icon-xs"
-                      variant={activeRightPanelKind === "diff" ? "secondary" : "ghost-muted"}
-                      aria-label={gt("Toggle diff panel for focused model")}
-                      onClick={() => toggleFocusedPanel("diff")}
-                    />
-                  }
+              {panelButtons.map((button) => (
+                <HeaderTooltipButton
+                  key={button.kind}
+                  active={activeRightPanelKind === button.kind}
+                  label={button.label}
+                  tooltip={button.tooltip}
+                  onClick={button.onClick}
                 >
-                  <FileDiffIcon className="size-3.5" />
-                </TooltipTrigger>
-                <TooltipPopup side="bottom">
-                  <T>Diff (focused model)</T>
-                </TooltipPopup>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="icon-xs"
-                      variant={activeRightPanelKind === "files" ? "secondary" : "ghost-muted"}
-                      aria-label={gt("Toggle files panel for focused model")}
-                      onClick={() => toggleFocusedPanel("files")}
-                    />
-                  }
-                >
-                  <FolderTreeIcon className="size-3.5" />
-                </TooltipTrigger>
-                <TooltipPopup side="bottom">
-                  <T>Files (focused model)</T>
-                </TooltipPopup>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="icon-xs"
-                      variant={activeRightPanelKind === "terminal" ? "secondary" : "ghost-muted"}
-                      aria-label={gt("Open terminal for focused model")}
-                      onClick={() => {
-                        const store = useRightPanelStore.getState();
-                        store.openTerminal(focusedContenderRef, DEFAULT_THREAD_TERMINAL_ID);
-                      }}
-                    />
-                  }
-                >
-                  <TerminalIcon className="size-3.5" />
-                </TooltipTrigger>
-                <TooltipPopup side="bottom">
-                  <T>Terminal (focused model)</T>
-                </TooltipPopup>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="icon-xs"
-                      variant={activeRightPanelKind === "preview" ? "secondary" : "ghost-muted"}
-                      aria-label={gt("Open browser for focused model")}
-                      onClick={() => {
-                        const store = useRightPanelStore.getState();
-                        store.openBrowser(focusedContenderRef, null);
-                      }}
-                    />
-                  }
-                >
-                  <GlobeIcon className="size-3.5" />
-                </TooltipTrigger>
-                <TooltipPopup side="bottom">
-                  <T>Browser (focused model)</T>
-                </TooltipPopup>
-              </Tooltip>
+                  {button.icon}
+                </HeaderTooltipButton>
+              ))}
             </div>
           ) : null}
         </div>
@@ -742,12 +677,12 @@ export function CompareThreadView(props: {
                   busyAction={busyAction}
                   canOperate={canOperate}
                   rightPanelPortalTarget={rightPanelPortalTarget}
-                  broadcastControl={broadcastControl}
+                  broadcastControl={{ count: contenderIds.length, onBroadcast: handleBroadcast }}
                   onFocus={handleFocusContender}
                   onOpenDiff={handleOpenDiff}
-                  onPickWinner={(id) => void handlePickWinner(id)}
-                  onPopOut={(id) => void handlePopOut(id)}
-                  onDrop={(id) => void handleDrop(id)}
+                  onPickWinner={handlePickWinner}
+                  onPopOut={handlePopOut}
+                  onDrop={handleDrop}
                 />
               </div>
             );

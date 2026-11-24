@@ -398,7 +398,7 @@ import { ChatTerminalDrawers } from "./chat/ChatTerminalDrawers";
 import { ChatRightPanel } from "./chat/ChatRightPanel";
 import { createPortal } from "react-dom";
 import { CompareStartDialog } from "./chat/CompareStartDialog";
-import type { CompareBroadcastControl } from "./chat/compareThread.logic";
+import { CompareColumnContext } from "./chat/compareThread.logic";
 import { useDraftEnvironmentRouting } from "./chat/useDraftEnvironmentRouting";
 import { branchMismatchBannerItem, extensionStatusBannerItem } from "./chat/ThreadActivityBanners";
 import { ThreadNow } from "./chat/ThreadNow";
@@ -441,10 +441,6 @@ type ChatViewProps =
       forceExpandedMobileComposer?: boolean;
       /** A side chat in its parent's right panel; the parent keeps the keyboard and workspace UI. */
       embedded?: SideChatParentPanel;
-      /** Optional portal host for a shared right panel (used by focused compare contenders). */
-      rightPanelPortalTarget?: HTMLElement | null;
-      /** Optional broadcast-to-all control for compare contender composers. */
-      compareBroadcast?: CompareBroadcastControl;
       routeKind: "server";
       draftId?: never;
     }
@@ -476,9 +472,9 @@ export default function ChatView(props: ChatViewProps) {
     embedded: parentPanel,
   } = props;
   const embedded = parentPanel !== undefined;
+  const compareColumn = use(CompareColumnContext);
   const rightPanelPortalTarget =
-    routeKind === "server" ? (props.rightPanelPortalTarget ?? null) : null;
-  const compareBroadcast = routeKind === "server" ? props.compareBroadcast : undefined;
+    routeKind === "server" ? (compareColumn?.rightPanelPortalTarget ?? null) : null;
   const [compareDialogRunId, setCompareDialogRunId] = useState<RunId | null>(null);
   const onCompareFromRunStable = useStableCallback(({ runId }: { readonly runId: RunId }) => {
     setCompareDialogRunId(runId);
@@ -3930,7 +3926,6 @@ export default function ChatView(props: ChatViewProps) {
                                 onPageScrollRelease={onComposerPageScrollReleaseStable}
                                 onCompactContext={onComposerCompactContextStable}
                                 onSend={onComposerSendStable}
-                                compareBroadcast={compareBroadcast}
                                 onResume={onComposerResumeStable}
                                 onInterrupt={onInterruptStable}
                                 onSelectActivePendingUserInputOption={

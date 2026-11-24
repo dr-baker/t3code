@@ -39,50 +39,73 @@ const compareHostVisitTracker = createThreadVisitTracker({
   visit: threadEnvironment.visit,
 });
 
+function useMobileComparePick(environmentId: EnvironmentId, hostThreadId: ThreadId) {
+  const gt = useGT();
+  const navigation = useNavigation();
+  const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
+  const pickWinner = useAtomCommand(threadEnvironment.pickCompareWinner, { reportFailure: false });
+  const undoPick = useAtomCommand(threadEnvironment.undoComparePick, { reportFailure: false });
+  const [busy, setBusy] = useState(false);
+
+  const replaceThread = (threadId: ThreadId) =>
+    navigation.dispatch(
+      StackActions.replace("Thread", {
+        environmentId: String(environmentId),
+        threadId: String(threadId),
+      }),
+    );
+
+  const pick = async (winnerThreadId: ThreadId, navigateToWinner: boolean) => {
+    if (busy || !canOperate) return;
+    setBusy(true);
+    const result = await pickWinner({
+      environmentId,
+      input: { threadId: hostThreadId, winnerThreadId },
+    });
+    setBusy(false);
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        Dialog.alert(
+          gt("Could not pick winner"),
+          error instanceof Error ? error.message : undefined,
+        );
+      }
+      return;
+    }
+    if (navigateToWinner) replaceThread(winnerThreadId);
+    Dialog.alert(gt("Picked winner"), gt("Other models were settled."), [
+      {
+        text: gt("Undo"),
+        onPress: () => {
+          void undoPick({ environmentId, input: { threadId: hostThreadId } }).then((undoResult) => {
+            if (undoResult._tag === "Success") replaceThread(hostThreadId);
+          });
+        },
+      },
+      { text: gt("Done"), style: "cancel" },
+    ]);
+  };
+
+  return { canOperate, busy, setBusy, pick, replaceThread };
+}
+
 function ContenderStatusPill(props: { readonly shell: EnvironmentThreadShell | null }) {
   const { shell } = props;
   if (!shell) return null;
-  if (shell.hasPendingApprovals || shell.pendingSubagentRequest === "approval") {
-    return (
-      <View className="rounded-full bg-warning/20 px-2 py-0.5">
-        <Text className="text-xs font-medium text-warning-foreground">
-          <T>Approval</T>
-        </Text>
-      </View>
-    );
-  }
-  if (shell.hasPendingUserInput || shell.pendingSubagentRequest === "user_input") {
-    return (
-      <View className="rounded-full bg-warning/20 px-2 py-0.5">
-        <Text className="text-xs font-medium text-warning-foreground">
-          <T>Input</T>
-        </Text>
-      </View>
-    );
-  }
-  if (shell.latestRun?.status === "failed") {
-    return (
-      <View className="rounded-full bg-destructive/15 px-2 py-0.5">
-        <Text className="text-xs font-medium text-destructive">
-          <T>Failed</T>
-        </Text>
-      </View>
-    );
-  }
-  if (threadRuntimeIsActive(shell.runtime)) {
-    return (
-      <View className="rounded-full bg-subtle px-2 py-0.5">
-        <Text className="text-xs font-medium text-foreground-muted">
-          <T>Running</T>
-        </Text>
-      </View>
-    );
-  }
+  const badge =
+    shell.hasPendingApprovals || shell.pendingSubagentRequest === "approval"
+      ? { bg: "bg-warning/20", text: "text-warning-foreground", label: <T>Approval</T> }
+      : shell.hasPendingUserInput || shell.pendingSubagentRequest === "user_input"
+        ? { bg: "bg-warning/20", text: "text-warning-foreground", label: <T>Input</T> }
+        : shell.latestRun?.status === "failed"
+          ? { bg: "bg-destructive/15", text: "text-destructive", label: <T>Failed</T> }
+          : threadRuntimeIsActive(shell.runtime)
+            ? { bg: "bg-subtle", text: "text-foreground-muted", label: <T>Running</T> }
+            : { bg: "bg-subtle", text: "text-foreground-muted", label: <T>Ready</T> };
   return (
-    <View className="rounded-full bg-subtle px-2 py-0.5">
-      <Text className="text-xs font-medium text-foreground-muted">
-        <T>Ready</T>
-      </Text>
+    <View className={cn("rounded-full px-2 py-0.5", badge.bg)}>
+      <Text className={cn("text-xs font-medium", badge.text)}>{badge.label}</Text>
     </View>
   );
 }
@@ -154,70 +177,23 @@ export function CompareHostScreen(props: {
   const gt = useGT();
   const navigation = useNavigation();
   const goBack = useWorkspaceBackNavigation();
-  const canOperate = useEnvironmentScope(hostThread.environmentId, AuthOrchestrationOperateScope);
-  const pickWinner = useAtomCommand(threadEnvironment.pickCompareWinner, { reportFailure: false });
-  const undoPick = useAtomCommand(threadEnvironment.undoComparePick, { reportFailure: false });
   const popOut = useAtomCommand(threadEnvironment.popOutCompareContender, { reportFailure: false });
-  const [busy, setBusy] = useState(false);
+  const { canOperate, busy, setBusy, pick, replaceThread } = useMobileComparePick(
+    hostThread.environmentId,
+    hostThread.id,
+  );
 
   useAtomMount(compareHostVisitTracker(scopeThreadRef(hostThread.environmentId, hostThread.id)));
 
   const contenderIds = hostThread.compare?.contenderThreadIds ?? [];
 
-  const handleOpen = (contenderId: ThreadId) => {
+  const handleOpen = (contenderId: ThreadId) =>
     navigation.dispatch(
       StackActions.push("Thread", {
         environmentId: String(hostThread.environmentId),
         threadId: String(contenderId),
       }),
     );
-  };
-
-  const handlePickWinner = async (winnerThreadId: ThreadId) => {
-    if (busy || !canOperate) return;
-    setBusy(true);
-    const result = await pickWinner({
-      environmentId: hostThread.environmentId,
-      input: { threadId: hostThread.id, winnerThreadId },
-    });
-    setBusy(false);
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        Dialog.alert(
-          gt("Could not pick winner"),
-          error instanceof Error ? error.message : undefined,
-        );
-      }
-      return;
-    }
-    navigation.dispatch(
-      StackActions.replace("Thread", {
-        environmentId: String(hostThread.environmentId),
-        threadId: String(winnerThreadId),
-      }),
-    );
-    Dialog.alert(gt("Picked winner"), gt("Other models were settled."), [
-      {
-        text: gt("Undo"),
-        onPress: () => {
-          void undoPick({
-            environmentId: hostThread.environmentId,
-            input: { threadId: hostThread.id },
-          }).then((undoResult) => {
-            if (undoResult._tag !== "Success") return;
-            navigation.dispatch(
-              StackActions.replace("Thread", {
-                environmentId: String(hostThread.environmentId),
-                threadId: String(hostThread.id),
-              }),
-            );
-          });
-        },
-      },
-      { text: gt("Done"), style: "cancel" },
-    ]);
-  };
 
   const handlePopOut = async (contenderThreadId: ThreadId) => {
     if (busy || !canOperate) return;
@@ -237,14 +213,7 @@ export function CompareHostScreen(props: {
       }
       return;
     }
-    if (contenderIds.length <= 1) {
-      navigation.dispatch(
-        StackActions.replace("Thread", {
-          environmentId: String(hostThread.environmentId),
-          threadId: String(contenderThreadId),
-        }),
-      );
-    }
+    if (contenderIds.length <= 1) replaceThread(contenderThreadId);
   };
 
   return (
@@ -278,7 +247,7 @@ export function CompareHostScreen(props: {
             busy={busy}
             canOperate={canOperate}
             onOpen={handleOpen}
-            onPickWinner={(id) => void handlePickWinner(id)}
+            onPickWinner={(id) => void pick(id, true)}
             onPopOut={(id) => void handlePopOut(id)}
           />
         ))}
@@ -338,66 +307,14 @@ export function CompareContenderSwitcherBar(props: {
   readonly hostThreadId: ThreadId;
   readonly currentContenderId: ThreadId;
 }) {
-  const gt = useGT();
-  const navigation = useNavigation();
   const hostShell = useQuietThreadShell(scopeThreadRef(props.environmentId, props.hostThreadId));
-  const canOperate = useEnvironmentScope(props.environmentId, AuthOrchestrationOperateScope);
-  const pickWinner = useAtomCommand(threadEnvironment.pickCompareWinner, { reportFailure: false });
-  const undoPick = useAtomCommand(threadEnvironment.undoComparePick, { reportFailure: false });
-  const [busy, setBusy] = useState(false);
+  const { canOperate, busy, pick, replaceThread } = useMobileComparePick(
+    props.environmentId,
+    props.hostThreadId,
+  );
 
   const contenderIds = hostShell?.compare?.contenderThreadIds ?? [];
   if (contenderIds.length === 0) return null;
-
-  const handleSelect = (contenderId: ThreadId) => {
-    if (contenderId === props.currentContenderId) return;
-    navigation.dispatch(
-      StackActions.replace("Thread", {
-        environmentId: String(props.environmentId),
-        threadId: String(contenderId),
-      }),
-    );
-  };
-
-  const handlePick = async () => {
-    if (busy || !canOperate) return;
-    setBusy(true);
-    const result = await pickWinner({
-      environmentId: props.environmentId,
-      input: { threadId: props.hostThreadId, winnerThreadId: props.currentContenderId },
-    });
-    setBusy(false);
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        Dialog.alert(
-          gt("Could not pick winner"),
-          error instanceof Error ? error.message : undefined,
-        );
-      }
-      return;
-    }
-    Dialog.alert(gt("Picked winner"), gt("Other models were settled."), [
-      {
-        text: gt("Undo"),
-        onPress: () => {
-          void undoPick({
-            environmentId: props.environmentId,
-            input: { threadId: props.hostThreadId },
-          }).then((undoResult) => {
-            if (undoResult._tag !== "Success") return;
-            navigation.dispatch(
-              StackActions.replace("Thread", {
-                environmentId: String(props.environmentId),
-                threadId: String(props.hostThreadId),
-              }),
-            );
-          });
-        },
-      },
-      { text: gt("Done"), style: "cancel" },
-    ]);
-  };
 
   return (
     <View
@@ -414,7 +331,9 @@ export function CompareContenderSwitcherBar(props: {
               environmentId={props.environmentId}
               contenderId={contenderId}
               active={contenderId === props.currentContenderId}
-              onSelect={handleSelect}
+              onSelect={(id) => {
+                if (id !== props.currentContenderId) replaceThread(id);
+              }}
             />
           ))}
         </View>
@@ -423,7 +342,7 @@ export function CompareContenderSwitcherBar(props: {
         accessibilityRole="button"
         disabled={!canOperate || busy}
         className="rounded-full bg-subtle px-3 py-1"
-        onPress={() => void handlePick()}
+        onPress={() => void pick(props.currentContenderId, false)}
       >
         <Text className="text-xs font-medium text-foreground">
           <T>Pick</T>

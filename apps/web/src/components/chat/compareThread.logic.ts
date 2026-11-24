@@ -1,3 +1,4 @@
+import { createContext } from "react";
 import type { ModelSelection, ServerProvider, ThreadId } from "@t3tools/contracts";
 import { MODEL_COMPARE_LIMITS } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -13,6 +14,13 @@ export interface CompareBroadcastControl {
   readonly count: number;
   readonly onBroadcast: (payload: CompareBroadcastPayload) => Promise<boolean>;
 }
+
+export interface CompareColumnContextValue {
+  readonly broadcast: CompareBroadcastControl;
+  readonly rightPanelPortalTarget: HTMLElement | null;
+}
+
+export const CompareColumnContext = createContext<CompareColumnContextValue | null>(null);
 
 export function resolveFocusedContenderId(
   contenderIds: ReadonlyArray<ThreadId>,

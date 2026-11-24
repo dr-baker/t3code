@@ -2,11 +2,12 @@ import { msg } from "gt-react";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m } from "~/i18n/messages";
 import {
+  CommandId,
   MODEL_COMPARE_LIMITS,
+  ThreadId,
   type EnvironmentId,
   type ModelSelection,
   type RuntimeMode,
-  type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
@@ -170,10 +171,23 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
         targets.length >= MODEL_COMPARE_LIMITS.minContenders &&
         targets.length <= MODEL_COMPARE_LIMITS.maxContenders;
       if (supportsModelCompare) {
+        const retryKey = JSON.stringify([
+          "compare",
+          routeThreadKey,
+          messageText,
+          targets.map((target) => `${target.selection.instanceId}:${target.selection.model}`),
+        ]);
+        let hostThreadId = uncertainSubmissionsRef.current.get(retryKey);
+        if (!hostThreadId) {
+          hostThreadId = ThreadId.make(`compare:${newMessageId().slice(-12)}`);
+          uncertainSubmissionsRef.current.set(retryKey, hostThreadId);
+        }
         const compareResult = await startCompare({
           environmentId,
           input: {
             mode: "new",
+            commandId: CommandId.make(`start:${hostThreadId}`),
+            hostThreadId,
             projectId: project.id,
             title,
             generateTitle: true,
@@ -200,6 +214,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
         if (compareResult._tag === "Failure") {
           throw squashAtomCommandFailure(compareResult);
         }
+        uncertainSubmissionsRef.current.delete(retryKey);
         sendInFlightRef.current = false;
         resetLocalDispatch();
         releasedComposer = true;
