@@ -52,6 +52,7 @@ import {
   CircleDashedIcon,
   CircleDotDashedIcon,
   ClockIcon,
+  Columns2Icon,
   GitBranchIcon,
   FolderIcon,
   MessageCircleQuestionIcon,
@@ -1413,6 +1414,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         <EnvironmentMachineIcon aria-hidden kind={props.environmentMachine} className="size-3.5" />
       </span>
     ) : null;
+  const compareBadge =
+    thread.compareRollup !== null ? (
+      <span
+        data-testid="sidebar-compare-badge"
+        className="inline-flex shrink-0 items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 font-medium text-2xs text-primary tabular-nums"
+      >
+        <Columns2Icon aria-hidden className="size-3" />
+        {thread.compareRollup.activeCount > 0
+          ? `${thread.compareRollup.readyCount}/${thread.compareRollup.totalCount}`
+          : thread.compareRollup.totalCount}
+      </span>
+    ) : null;
   const diff = latestRunDiff(thread);
   // Only the trailing icons would remain, so the row moves them to the title line instead.
   const metaLineEmpty =
@@ -1420,6 +1433,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     !showsScratchMachine &&
     prBadge === null &&
     issueBadge === null &&
+    compareBadge === null &&
     (compactCards || watchBadge === null) &&
     diff === null &&
     runningTerminalIds.length === 0;
@@ -1444,6 +1458,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       ) : (
         <span className="flex-1" />
       )}
+      {compareBadge}
       {terminalStatusIcon}
       {prBadge}
       {issueBadge}

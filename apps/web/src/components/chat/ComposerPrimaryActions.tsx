@@ -10,6 +10,7 @@ import { msg, useGT, useMessages } from "gt-react";
 import {
   CheckIcon,
   ChevronLeftIcon,
+  Columns2Icon,
   Minimize2Icon,
   PlayIcon,
   CornerUpRightIcon,
@@ -60,6 +61,10 @@ interface ComposerPrimaryActionsProps {
   preserveComposerFocusOnPointerDown?: boolean;
   isEditingQueuedMessage?: boolean;
   onSubmitMessage?: MouseEventHandler<HTMLButtonElement>;
+  /** Number of active compare models when rendering inside a compare column. */
+  compareBroadcastCount?: number | undefined;
+  /** Sends the current draft to every active compare contender at once. */
+  onBroadcastSubmit?: MouseEventHandler<HTMLButtonElement> | undefined;
   onResume?: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -252,6 +257,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   preserveComposerFocusOnPointerDown = false,
   isEditingQueuedMessage = false,
   onSubmitMessage,
+  compareBroadcastCount,
+  onBroadcastSubmit,
   onResume,
   onPreviousPendingQuestion,
   onInterrupt,
@@ -485,6 +492,42 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     </button>
   );
 
+  const broadcastButton =
+    compareBroadcastCount !== undefined &&
+    compareBroadcastCount > 1 &&
+    onBroadcastSubmit !== undefined &&
+    !showResume &&
+    !isEditingQueuedMessage ? (
+      <Tooltip key="broadcast-submit">
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              data-testid="composer-broadcast-send"
+              className="inline-flex h-8 shrink-0 cursor-pointer items-center gap-1 rounded-full border border-border/80 bg-card px-2.5 text-xs font-medium text-foreground/85 shadow-2xs transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              {...pointerFocusProps}
+              onClick={onBroadcastSubmit}
+              disabled={
+                isSendBusy || isSendDisabled || isEnvironmentUnavailable || !hasSendableContent
+              }
+              aria-label={gt("Send to all {count} models", {
+                count: compareBroadcastCount,
+              })}
+            />
+          }
+        >
+          <Columns2Icon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+          <span>{gt("All ({count})", { count: compareBroadcastCount })}</span>
+        </TooltipTrigger>
+        <TooltipPopup>
+          {gt("Send to all {count} models ({modifier}+Shift+Enter)", {
+            count: compareBroadcastCount,
+            modifier,
+          })}
+        </TooltipPopup>
+      </Tooltip>
+    ) : null;
+
   const submit = (
     <Tooltip key="submit">
       <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
@@ -495,6 +538,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     return withStopButton(
       <>
         {children}
+        {broadcastButton}
         {submit}
       </>,
     );
@@ -538,6 +582,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         </TooltipPopup>
       </Tooltip>
       {children}
+      {broadcastButton}
       {submit}
     </div>,
   );

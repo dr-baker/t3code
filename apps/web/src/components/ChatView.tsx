@@ -78,6 +78,7 @@ import {
   type ModelSelection,
   type PreviewAnnotationPayload,
   ProviderInstanceId,
+  type RunId,
   type ServerProvider,
   type ScopedThreadRef,
   type ThreadId,
@@ -395,6 +396,9 @@ import { observeResize } from "~/lib/observeResize";
 import { ThreadVisitWatermark } from "./chat/ThreadVisitWatermark";
 import { ChatTerminalDrawers } from "./chat/ChatTerminalDrawers";
 import { ChatRightPanel } from "./chat/ChatRightPanel";
+import { createPortal } from "react-dom";
+import { CompareStartDialog } from "./chat/CompareStartDialog";
+import type { CompareBroadcastControl } from "./chat/compareThread.logic";
 import { useDraftEnvironmentRouting } from "./chat/useDraftEnvironmentRouting";
 import { branchMismatchBannerItem, extensionStatusBannerItem } from "./chat/ThreadActivityBanners";
 import { ThreadNow } from "./chat/ThreadNow";
@@ -437,6 +441,10 @@ type ChatViewProps =
       forceExpandedMobileComposer?: boolean;
       /** A side chat in its parent's right panel; the parent keeps the keyboard and workspace UI. */
       embedded?: SideChatParentPanel;
+      /** Optional portal host for a shared right panel (used by focused compare contenders). */
+      rightPanelPortalTarget?: HTMLElement | null;
+      /** Optional broadcast-to-all control for compare contender composers. */
+      compareBroadcast?: CompareBroadcastControl;
       routeKind: "server";
       draftId?: never;
     }
@@ -468,6 +476,13 @@ export default function ChatView(props: ChatViewProps) {
     embedded: parentPanel,
   } = props;
   const embedded = parentPanel !== undefined;
+  const rightPanelPortalTarget =
+    routeKind === "server" ? (props.rightPanelPortalTarget ?? null) : null;
+  const compareBroadcast = routeKind === "server" ? props.compareBroadcast : undefined;
+  const [compareDialogRunId, setCompareDialogRunId] = useState<RunId | null>(null);
+  const onCompareFromRunStable = useStableCallback(({ runId }: { readonly runId: RunId }) => {
+    setCompareDialogRunId(runId);
+  });
   const panelHostShell = useQuietThreadShell(parentPanel?.hostRef ?? null);
   const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
@@ -3650,9 +3665,19 @@ export default function ChatView(props: ChatViewProps) {
                   announceTurnStatus={!isProviderSubagent}
                   onOpenToolDiff={parentPanel?.openToolDiff ?? onOpenToolDiffStable}
                   // Side chat runs keep no checkpoints to diff, and a fork would promote the side chat.
-                  {...(embedded
+                  // Compare contenders keep checkpoints so their turn diffs remain inspectable.
+                  {...(embedded && activeThread?.lineage.compare !== true
                     ? {}
-                    : { onOpenTurnDiff: onOpenTurnDiffStable, onForkFromRun: onForkFromRunStable })}
+                    : { onOpenTurnDiff: onOpenTurnDiffStable })}
+                  {...(embedded ? {} : { onForkFromRun: onForkFromRunStable })}
+                  {...(!embedded &&
+                  isServerThread &&
+                  serverConfig?.environment.capabilities.modelCompare === true &&
+                  activeThread?.lineage.sideChat !== true &&
+                  activeThread?.lineage.compare !== true &&
+                  !isSubagentThread
+                    ? { onCompareFromRun: onCompareFromRunStable }
+                    : {})}
                   onOpenThread={onOpenRelatedThreadStable}
                   parentThreadLink={parentThreadLink}
                   workflowOpening={workflowOpening}
@@ -3905,6 +3930,7 @@ export default function ChatView(props: ChatViewProps) {
                                 onPageScrollRelease={onComposerPageScrollReleaseStable}
                                 onCompactContext={onComposerCompactContextStable}
                                 onSend={onComposerSendStable}
+                                compareBroadcast={compareBroadcast}
                                 onResume={onComposerResumeStable}
                                 onInterrupt={onInterruptStable}
                                 onSelectActivePendingUserInputOption={
@@ -4151,70 +4177,94 @@ export default function ChatView(props: ChatViewProps) {
         )}
       </div>
 
-      {rightPanelPresent && activeThreadRef && !embedded ? (
-        <ChatRightPanel
-          sheet={shouldUsePlanSidebarSheet}
-          workspaceLayoutElement={workspaceLayoutElement}
-          widthStorageKey={`t3code:preview-panel-width:${activeThreadKey}`}
-          sheetAnimationDurationMs={panelAnimationsActive ? panelAnimationDurationMs : 0}
-          onCloseSheet={closePreviewPanelStable}
-          open={rightPanelOpen}
-          keybindings={keybindings}
-          getShortcutContext={getShortcutContextStable}
-          maximized={rightPanelMaximized}
-          layoutControls={
-            rightPanelOpen ? (
-              <div className="mr-px flex items-center gap-1">
-                <RightPanelMaximizeControl
-                  maximized={rightPanelMaximized}
-                  onToggle={toggleRightPanelMaximizedStable}
-                />
-                {panelToggleControls}
-              </div>
-            ) : null
-          }
-          surfaces={renderedRightPanelSurfaces}
-          environmentId={activeThreadRef.environmentId}
-          activeSurfaceId={renderedRightPanelSurface?.id ?? null}
-          pendingSurfaceIds={pendingFileSurfaceIds}
-          previewSessions={activePreviewState.sessions}
-          desktopByTabId={activePreviewState.desktopByTabId}
-          previewRuntimeTabId={resolvePreviewRuntimeTabId}
-          terminalLabelsById={activeTerminalLabelsById}
-          onActivate={activateRightPanelSurfaceStable}
-          onCloseSurface={closeRightPanelSurfaceStable}
-          onOpenInMainView={openSurfaceInMainView}
-          onRenameDevice={(surfaceId, title) => {
-            if (activeThreadRef)
-              useRightPanelStore.getState().renameDevice(activeThreadRef, surfaceId, title);
+      {(() => {
+        if (!rightPanelPresent || !activeThreadRef) return null;
+        if (embedded && !rightPanelPortalTarget) return null;
+        const panel = (
+          <ChatRightPanel
+            sheet={shouldUsePlanSidebarSheet}
+            workspaceLayoutElement={rightPanelPortalTarget?.parentElement ?? workspaceLayoutElement}
+            widthStorageKey={`t3code:preview-panel-width:${activeThreadKey}`}
+            sheetAnimationDurationMs={panelAnimationsActive ? panelAnimationDurationMs : 0}
+            onCloseSheet={closePreviewPanelStable}
+            open={rightPanelOpen}
+            keybindings={keybindings}
+            getShortcutContext={getShortcutContextStable}
+            maximized={rightPanelMaximized}
+            layoutControls={
+              !embedded && rightPanelOpen ? (
+                <div className="mr-px flex items-center gap-1">
+                  <RightPanelMaximizeControl
+                    maximized={rightPanelMaximized}
+                    onToggle={toggleRightPanelMaximizedStable}
+                  />
+                  {panelToggleControls}
+                </div>
+              ) : null
+            }
+            surfaces={renderedRightPanelSurfaces}
+            environmentId={activeThreadRef.environmentId}
+            activeSurfaceId={renderedRightPanelSurface?.id ?? null}
+            pendingSurfaceIds={pendingFileSurfaceIds}
+            previewSessions={activePreviewState.sessions}
+            desktopByTabId={activePreviewState.desktopByTabId}
+            previewRuntimeTabId={resolvePreviewRuntimeTabId}
+            terminalLabelsById={activeTerminalLabelsById}
+            onActivate={activateRightPanelSurfaceStable}
+            onCloseSurface={closeRightPanelSurfaceStable}
+            onOpenInMainView={openSurfaceInMainView}
+            onRenameDevice={(surfaceId, title) => {
+              if (activeThreadRef)
+                useRightPanelStore.getState().renameDevice(activeThreadRef, surfaceId, title);
+            }}
+            onCloseOtherSurfaces={closeOtherRightPanelSurfacesStable}
+            onCloseSurfacesToRight={closeRightPanelSurfacesToRightStable}
+            onCloseAllSurfaces={closeAllRightPanelSurfacesStable}
+            onMoveSurface={moveRightPanelSurfaceStable}
+            onCopyFilePath={copyRightPanelFilePathStable}
+            onAddBrowser={() => createBrowserSurface()}
+            onAddBrowserInProfile={createBrowserSurfaceStable}
+            onDuplicateBrowser={duplicateBrowserSurfaceStable}
+            onAddTerminal={addTerminalSurfaceStable}
+            onAddDiff={addDiffSurfaceStable}
+            onAddFiles={addFilesSurfaceStable}
+            onAddPullRequest={addPullRequestSurfaceStable}
+            onAddPullRequests={addPullRequestsSurfaceStable}
+            onAddDevice={addDeviceSurfaceStable}
+            onAddSideChat={sideChatsOffered ? openSideChatStable : undefined}
+            browserAvailable={canOperatePreview && browserAvailable}
+            terminalAvailable={activeProject !== null && canOperateTerminal}
+            diffAvailable={isServerThread && diffAvailable}
+            filesAvailable={activeProject !== null}
+            pullRequestAvailable={pullRequestSurfaceAvailable}
+            pullRequestsAvailable={linkedItemsSurfaceAvailable}
+            deviceAvailable={activeThreadRef !== null}
+            sideChatAvailable={sideChat.available}
+            sideChatDisabledReason={sideChatDisabledReason}
+          >
+            {rightPanelContent}
+          </ChatRightPanel>
+        );
+        return embedded && rightPanelPortalTarget
+          ? createPortal(panel, rightPanelPortalTarget)
+          : panel;
+      })()}
+
+      {!embedded && isServerThread && activeThreadRef !== null && compareDialogRunId !== null ? (
+        <CompareStartDialog
+          open={compareDialogRunId !== null}
+          onOpenChange={(open) => {
+            if (!open) setCompareDialogRunId(null);
           }}
-          onCloseOtherSurfaces={closeOtherRightPanelSurfacesStable}
-          onCloseSurfacesToRight={closeRightPanelSurfacesToRightStable}
-          onCloseAllSurfaces={closeAllRightPanelSurfacesStable}
-          onMoveSurface={moveRightPanelSurfaceStable}
-          onCopyFilePath={copyRightPanelFilePathStable}
-          onAddBrowser={() => createBrowserSurface()}
-          onAddBrowserInProfile={createBrowserSurfaceStable}
-          onDuplicateBrowser={duplicateBrowserSurfaceStable}
-          onAddTerminal={addTerminalSurfaceStable}
-          onAddDiff={addDiffSurfaceStable}
-          onAddFiles={addFilesSurfaceStable}
-          onAddPullRequest={addPullRequestSurfaceStable}
-          onAddPullRequests={addPullRequestsSurfaceStable}
-          onAddDevice={addDeviceSurfaceStable}
-          onAddSideChat={sideChatsOffered ? openSideChatStable : undefined}
-          browserAvailable={canOperatePreview && browserAvailable}
-          terminalAvailable={activeProject !== null && canOperateTerminal}
-          diffAvailable={isServerThread && diffAvailable}
-          filesAvailable={activeProject !== null}
-          pullRequestAvailable={pullRequestSurfaceAvailable}
-          pullRequestsAvailable={linkedItemsSurfaceAvailable}
-          deviceAvailable={activeThreadRef !== null}
-          sideChatAvailable={sideChat.available}
-          sideChatDisabledReason={sideChatDisabledReason}
-        >
-          {rightPanelContent}
-        </ChatRightPanel>
+          environmentId={environmentId}
+          hostThreadId={threadId}
+          sourceRunId={compareDialogRunId}
+          currentModelSelection={activeThread?.modelSelection ?? null}
+          isGitRepo={isGitRepo}
+          baseBranch={activeThread?.branch ?? null}
+          worktreePath={activeThreadWorktreePath}
+          defaultStartFromOrigin={activeProjectSettings.settings.newWorktreesStartFromOrigin}
+        />
       ) : null}
 
       <RevertConfirmHost
@@ -4226,7 +4276,7 @@ export default function ChatView(props: ChatViewProps) {
         onConfirm={onConfirmRevertStable}
       />
       {embedded ? null : <LinkPullRequestDialogHost />}
-      <ThreadVisitWatermark threadRef={routeThreadRef} />
+      {embedded ? null : <ThreadVisitWatermark threadRef={routeThreadRef} />}
       <ExpandedImageDialogHost threadKey={routeThreadKey} />
     </div>
   );

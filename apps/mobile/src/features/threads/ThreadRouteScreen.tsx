@@ -32,6 +32,7 @@ import {
   AuthTerminalReadScope,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  isActiveCompareHost,
   isProviderNativeSubagentThread,
   MessageId,
   ThreadId,
@@ -123,6 +124,7 @@ import {
   threadRouteOpensDraft,
 } from "./thread-route-hydration";
 import { ThreadHeader } from "./ThreadHeader";
+import { CompareContenderSwitcherBar, CompareHostScreen } from "./CompareHostScreen";
 import { resumeThread } from "./resume-thread";
 import {
   useAndroidWorkspaceBack,
@@ -305,6 +307,14 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
   }
 
   if (selectedThread !== null && selectedThreadKey === routeThreadKey) {
+    if (isActiveCompareHost(selectedThread.source)) {
+      return withInspectorHeader(
+        <CompareHostScreen
+          hostThread={selectedThread}
+          hideHeader={props.inspectorPresentation !== undefined}
+        />,
+      );
+    }
     // ThreadRouteContent draws its own inspector header so it can show the sync status.
     return (
       <InspectorHeaderShownContext value={props.inspectorPresentation !== undefined}>
@@ -1052,25 +1062,35 @@ function ThreadRouteContent(
         <ThreadScreenBinding
           header={
             props.inspectorPresentation ? null : (
-              <ThreadHeader
-                title={selectedThread.title}
-                onOpenThreadWatches={
-                  routeEnvironmentRuntime?.serverConfig?.environment.capabilities.threadWatch ===
-                  true
-                    ? () =>
-                        navigation.navigate("ThreadBackgroundWork", {
-                          environmentId: selectedThread.environmentId,
-                          threadId: selectedThread.id,
-                        })
-                    : undefined
-                }
-                subtitle={threadStatusLabel ?? headerSubtitle}
-                gitControls={threadGitControlProps}
-                hasThreadCwd={selectedThreadCwd !== null}
-                inspectorMode={inspectorMode}
-                onOpenFilesInspector={handleOpenFilesInspector}
-                onReturnToThread={props.onReturnToThread}
-              />
+              <>
+                <ThreadHeader
+                  title={selectedThread.title}
+                  onOpenThreadWatches={
+                    routeEnvironmentRuntime?.serverConfig?.environment.capabilities.threadWatch ===
+                    true
+                      ? () =>
+                          navigation.navigate("ThreadBackgroundWork", {
+                            environmentId: selectedThread.environmentId,
+                            threadId: selectedThread.id,
+                          })
+                      : undefined
+                  }
+                  subtitle={threadStatusLabel ?? headerSubtitle}
+                  gitControls={threadGitControlProps}
+                  hasThreadCwd={selectedThreadCwd !== null}
+                  inspectorMode={inspectorMode}
+                  onOpenFilesInspector={handleOpenFilesInspector}
+                  onReturnToThread={props.onReturnToThread}
+                />
+                {selectedThread.lineage.compare === true &&
+                selectedThread.lineage.parentThreadId !== null ? (
+                  <CompareContenderSwitcherBar
+                    environmentId={selectedThread.environmentId}
+                    hostThreadId={selectedThread.lineage.parentThreadId}
+                    currentContenderId={selectedThread.id}
+                  />
+                ) : null}
+              </>
             )
           }
           canOperateThread={canOperateThread}

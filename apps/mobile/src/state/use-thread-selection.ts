@@ -81,6 +81,7 @@ function threadDetailToShell(
     branchPullRequest: thread.branchPullRequest ?? null,
     activeProviderThreadId: thread.activeProviderThreadId,
     lineage: thread.lineage,
+    ...(thread.compare !== undefined ? { compare: thread.compare } : {}),
     forkedFrom: thread.forkedFrom,
     createdBy: thread.createdBy,
     creationSource: thread.creationSource,
