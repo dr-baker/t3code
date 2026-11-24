@@ -4,6 +4,7 @@ import {
   OrchestrationV2StartCompareError,
   ThreadId,
   isActiveCompareHost,
+  type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
   type OrchestrationV2StartCompareFailure,
@@ -87,6 +88,38 @@ const shortKey = (commandId: CommandId): string =>
 
 const contenderLabel = (baseTitle: string, model: string): string => `${baseTitle} · ${model}`;
 
+const fanOutContenders = <S extends { readonly modelSelection: ModelSelection }, E, R>(
+  contenders: ReadonlyArray<S>,
+  runOne: (spec: S, index: number) => Effect.Effect<ThreadId, E, R>,
+) =>
+  Effect.forEach(
+    contenders,
+    (spec, index) =>
+      runOne(spec, index).pipe(
+        Effect.map((threadId) => ({ ok: true as const, threadId })),
+        Effect.catch((cause) =>
+          Effect.succeed({
+            ok: false as const,
+            failure: {
+              modelSelection: spec.modelSelection,
+              error: errorMessageOf(cause),
+            } satisfies OrchestrationV2StartCompareFailure,
+          }),
+        ),
+      ),
+    { concurrency: "unbounded" },
+  ).pipe(
+    Effect.map((outcomes) => {
+      const contenderThreadIds: Array<ThreadId> = [];
+      const failed: Array<OrchestrationV2StartCompareFailure> = [];
+      for (const outcome of outcomes) {
+        if (outcome.ok) contenderThreadIds.push(outcome.threadId);
+        else failed.push(outcome.failure);
+      }
+      return { contenderThreadIds, failed };
+    }),
+  );
+
 const executeStartCompare = Effect.fn("ThreadCompareService.executeStartCompare")(function* (
   input: OrchestrationV2StartCompareInput & {
     readonly createdBy: OrchestrationV2Actor;
@@ -103,22 +136,19 @@ const executeStartCompare = Effect.fn("ThreadCompareService.executeStartCompare"
       ...(cause === undefined ? {} : { cause }),
     });
 
-  const cleanupCommittedContenders = (
-    contenderThreadIds: ReadonlyArray<ThreadId>,
-    suffix: string,
+  const buildInitialMessage = (
+    index: number,
+    specText: string | undefined,
+    baseMessage: typeof input.initialMessage,
   ) =>
-    Effect.forEach(
-      contenderThreadIds,
-      (contenderId, index) =>
-        threads
-          .dispatch({
-            type: "thread.delete",
-            commandId: CommandId.make(`${input.commandId}:${suffix}:${index + 1}`),
-            threadId: contenderId,
-          })
-          .pipe(Effect.ignore),
-      { concurrency: "unbounded" },
-    );
+    baseMessage === undefined
+      ? undefined
+      : {
+          messageId: MessageId.make(`${input.commandId}:c:${index + 1}:msg`),
+          text: specText ?? baseMessage.text,
+          attachments: baseMessage.attachments,
+          ...(baseMessage.context === undefined ? {} : { context: baseMessage.context }),
+        };
 
   if (input.mode === "new") {
     yield* launches
@@ -131,15 +161,6 @@ const executeStartCompare = Effect.fn("ThreadCompareService.executeStartCompare"
 
     const hostThreadId =
       input.hostThreadId ?? ThreadId.make(`compare:${shortKey(input.commandId)}`);
-    const hostBranch =
-      input.workspaceStrategy.type === "worktree"
-        ? input.workspaceStrategy.baseRef
-        : (input.workspaceStrategy.branch ?? null);
-    const hostWorktreePath =
-      input.workspaceStrategy.type === "existing_worktree"
-        ? input.workspaceStrategy.worktreePath
-        : null;
-
     yield* threads
       .dispatch({
         type: "thread.create",
@@ -150,25 +171,26 @@ const executeStartCompare = Effect.fn("ThreadCompareService.executeStartCompare"
         modelSelection: input.contenders[0]!.modelSelection,
         runtimeMode: input.runtimeMode,
         interactionMode: input.interactionMode,
-        branch: hostBranch,
-        worktreePath: hostWorktreePath,
-        compare: {
-          contenderThreadIds: [],
-          sourceRunId: null,
-          selectedWinnerThreadId: null,
-        },
+        branch:
+          input.workspaceStrategy.type === "worktree"
+            ? input.workspaceStrategy.baseRef
+            : (input.workspaceStrategy.branch ?? null),
+        worktreePath:
+          input.workspaceStrategy.type === "existing_worktree"
+            ? input.workspaceStrategy.worktreePath
+            : null,
+        compare: { contenderThreadIds: [], sourceRunId: null, selectedWinnerThreadId: null },
         createdBy: input.createdBy,
         creationSource: input.creationSource,
       })
       .pipe(Effect.mapError((cause) => failCompare(errorMessageOf(cause), cause)));
 
-    const outcomes = yield* Effect.forEach(
+    const { contenderThreadIds, failed } = yield* fanOutContenders(
       input.contenders,
-      (spec, index) => {
-        const contenderId = ThreadId.make(`${hostThreadId}:c${index + 1}`);
-        return ThreadMessageIntake.launchThread({
+      (spec, index) =>
+        ThreadMessageIntake.launchThread({
           commandId: CommandId.make(`${input.commandId}:c:${index + 1}`),
-          threadId: contenderId,
+          threadId: ThreadId.make(`${hostThreadId}:c${index + 1}`),
           compareParentThreadId: hostThreadId,
           projectId: input.projectId,
           title: contenderLabel(input.title, spec.modelSelection.model),
@@ -177,38 +199,11 @@ const executeStartCompare = Effect.fn("ThreadCompareService.executeStartCompare"
           runtimeMode: input.runtimeMode,
           interactionMode: input.interactionMode,
           workspaceStrategy: input.workspaceStrategy,
-          initialMessage: {
-            messageId: MessageId.make(`${input.commandId}:c:${index + 1}:msg`),
-            text: spec.text ?? input.initialMessage.text,
-            attachments: input.initialMessage.attachments,
-            ...(input.initialMessage.context === undefined
-              ? {}
-              : { context: input.initialMessage.context }),
-          },
+          initialMessage: buildInitialMessage(index, spec.text, input.initialMessage)!,
           createdBy: input.createdBy,
           creationSource: input.creationSource,
-        }).pipe(
-          Effect.map((result) => ({ ok: true as const, threadId: result.threadId })),
-          Effect.catch((cause) =>
-            Effect.succeed({
-              ok: false as const,
-              failure: {
-                modelSelection: spec.modelSelection,
-                error: errorMessageOf(cause),
-              } satisfies OrchestrationV2StartCompareFailure,
-            }),
-          ),
-        );
-      },
-      { concurrency: "unbounded" },
+        }).pipe(Effect.map((result) => result.threadId)),
     );
-
-    const contenderThreadIds: Array<ThreadId> = [];
-    const failed: Array<OrchestrationV2StartCompareFailure> = [];
-    for (const outcome of outcomes) {
-      if (outcome.ok) contenderThreadIds.push(outcome.threadId);
-      else failed.push(outcome.failure);
-    }
 
     if (contenderThreadIds.length === 0) {
       yield* threads
@@ -224,24 +219,7 @@ const executeStartCompare = Effect.fn("ThreadCompareService.executeStartCompare"
       );
     }
 
-    yield* threads
-      .dispatch({
-        type: "thread.compare.attach",
-        commandId: CommandId.make(`${input.commandId}:attach`),
-        threadId: hostThreadId,
-        contenderThreadIds,
-        sourceRunId: null,
-      })
-      .pipe(
-        Effect.tapError(() => cleanupCommittedContenders(contenderThreadIds, "attach-cleanup")),
-        Effect.mapError((cause) => failCompare(errorMessageOf(cause), cause)),
-      );
-
-    return {
-      hostThreadId,
-      contenderThreadIds,
-      failed,
-    } satisfies OrchestrationV2StartCompareResult;
+    return { hostThreadId, contenderThreadIds, failed } satisfies OrchestrationV2StartCompareResult;
   }
 
   // mode: "fork" — mid-thread compare branched from a finished run on the host thread.
@@ -260,8 +238,25 @@ const executeStartCompare = Effect.fn("ThreadCompareService.executeStartCompare"
   ) {
     return yield* failCompare("Compare cannot be started from a nested thread.");
   }
+  const forkBatchKey = shortKey(input.commandId);
+  const forkBatchPrefix = `${input.hostThreadId}:cmp:${forkBatchKey}:`;
   if (isActiveCompareHost(host)) {
+    const existingBatch = host.compare!.contenderThreadIds.filter((id) =>
+      id.startsWith(forkBatchPrefix),
+    );
+    if (existingBatch.length > 0) {
+      return {
+        hostThreadId: input.hostThreadId,
+        contenderThreadIds: existingBatch,
+        failed: [],
+      } satisfies OrchestrationV2StartCompareResult;
+    }
     return yield* failCompare("This thread already has an active model comparison.");
+  }
+  if (hostProjection.runtimeRequests.some((request) => request.status === "pending")) {
+    return yield* failCompare(
+      "Resolve pending approvals or questions on this thread before starting a comparison.",
+    );
   }
   const sourceRun = hostProjection.runs.find((run) => run.id === input.sourceRunId);
   if (!sourceRun) {
@@ -278,8 +273,6 @@ const executeStartCompare = Effect.fn("ThreadCompareService.executeStartCompare"
       workspaceStrategy: input.workspaceStrategy,
     })
     .pipe(Effect.mapError((cause) => failCompare(errorMessageOf(cause), cause)));
-
-  const forkBatchKey = shortKey(input.commandId);
   const clearWorktree =
     input.workspaceStrategy.type === "worktree" ||
     (input.workspaceStrategy.type === "root" && host.worktreePath !== null);
@@ -290,103 +283,60 @@ const executeStartCompare = Effect.fn("ThreadCompareService.executeStartCompare"
       host.worktreePath !== input.workspaceStrategy.worktreePath) ||
     (input.workspaceStrategy.type === "root" && host.worktreePath !== null);
 
-  const outcomes = yield* Effect.forEach(
-    input.contenders,
-    (spec, index) =>
-      Effect.gen(function* () {
-        const contenderId = ThreadId.make(`${input.hostThreadId}:cmp:${forkBatchKey}:${index + 1}`);
-        const contenderTitle = contenderLabel(host.title, spec.modelSelection.model);
-        yield* threads.dispatch({
-          type: "thread.fork",
-          commandId: CommandId.make(`${input.commandId}:fork:${index + 1}`),
-          sourceThreadId: input.hostThreadId,
-          targetThreadId: contenderId,
-          sourcePoint: { type: "run", runId: input.sourceRunId },
+  const { contenderThreadIds, failed } = yield* fanOutContenders(input.contenders, (spec, index) =>
+    Effect.gen(function* () {
+      const contenderId = ThreadId.make(`${input.hostThreadId}:cmp:${forkBatchKey}:${index + 1}`);
+      const contenderTitle = contenderLabel(host.title, spec.modelSelection.model);
+      yield* threads.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make(`${input.commandId}:fork:${index + 1}`),
+        sourceThreadId: input.hostThreadId,
+        targetThreadId: contenderId,
+        sourcePoint: { type: "run", runId: input.sourceRunId },
+        title: contenderTitle,
+        compare: true,
+        modelSelection: spec.modelSelection,
+        clearWorktree,
+        createdBy: input.createdBy,
+        creationSource: input.creationSource,
+      });
+      if (needsLaunch) {
+        const initialMessage = buildInitialMessage(index, spec.text, input.initialMessage);
+        yield* ThreadMessageIntake.launchThread({
+          commandId: CommandId.make(`${input.commandId}:launch:${index + 1}`),
+          threadId: contenderId,
+          reuseExistingThread: true,
+          projectId: host.projectId,
           title: contenderTitle,
-          compare: true,
+          generateTitle: false,
           modelSelection: spec.modelSelection,
-          clearWorktree,
+          runtimeMode: host.runtimeMode,
+          interactionMode: host.interactionMode,
+          workspaceStrategy: input.workspaceStrategy,
+          awaitWorkspacePreparation: initialMessage === undefined,
+          ...(initialMessage === undefined ? {} : { initialMessage }),
           createdBy: input.createdBy,
           creationSource: input.creationSource,
-        });
-        if (needsLaunch) {
-          yield* ThreadMessageIntake.launchThread({
-            commandId: CommandId.make(`${input.commandId}:launch:${index + 1}`),
-            threadId: contenderId,
-            reuseExistingThread: true,
-            projectId: host.projectId,
-            title: contenderTitle,
-            generateTitle: false,
-            modelSelection: spec.modelSelection,
-            runtimeMode: host.runtimeMode,
-            interactionMode: host.interactionMode,
-            workspaceStrategy: input.workspaceStrategy,
-            awaitWorkspacePreparation: input.initialMessage === undefined,
-            ...(input.initialMessage === undefined
-              ? {}
-              : {
-                  initialMessage: {
-                    messageId: MessageId.make(`${input.commandId}:c:${index + 1}:msg`),
-                    text: spec.text ?? input.initialMessage.text,
-                    attachments: input.initialMessage.attachments,
-                    ...(input.initialMessage.context === undefined
-                      ? {}
-                      : { context: input.initialMessage.context }),
-                  },
-                }),
-            createdBy: input.createdBy,
-            creationSource: input.creationSource,
-          }).pipe(
-            Effect.tapError(() =>
-              threads
-                .dispatch({
-                  type: "thread.delete",
-                  commandId: CommandId.make(`${input.commandId}:fork-cleanup:${index + 1}`),
-                  threadId: contenderId,
-                  onlyIfUnused: true,
-                })
-                .pipe(Effect.ignore),
-            ),
-          );
-        }
-        return { ok: true as const, threadId: contenderId };
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.succeed({
-            ok: false as const,
-            failure: {
-              modelSelection: spec.modelSelection,
-              error: errorMessageOf(cause),
-            } satisfies OrchestrationV2StartCompareFailure,
-          }),
-        ),
-      ),
-    { concurrency: "unbounded" },
+        }).pipe(
+          Effect.tapError(() =>
+            threads
+              .dispatch({
+                type: "thread.delete",
+                commandId: CommandId.make(`${input.commandId}:fork-cleanup:${index + 1}`),
+                threadId: contenderId,
+                onlyIfUnused: true,
+              })
+              .pipe(Effect.ignore),
+          ),
+        );
+      }
+      return contenderId;
+    }),
   );
-
-  const contenderThreadIds: Array<ThreadId> = [];
-  const failed: Array<OrchestrationV2StartCompareFailure> = [];
-  for (const outcome of outcomes) {
-    if (outcome.ok) contenderThreadIds.push(outcome.threadId);
-    else failed.push(outcome.failure);
-  }
 
   if (contenderThreadIds.length === 0) {
     return yield* failCompare(failed[0]?.error ?? "None of the selected models could be forked.");
   }
-
-  yield* threads
-    .dispatch({
-      type: "thread.compare.attach",
-      commandId: CommandId.make(`${input.commandId}:attach`),
-      threadId: input.hostThreadId,
-      contenderThreadIds,
-      sourceRunId: input.sourceRunId,
-    })
-    .pipe(
-      Effect.tapError(() => cleanupCommittedContenders(contenderThreadIds, "attach-cleanup")),
-      Effect.mapError((cause) => failCompare(errorMessageOf(cause), cause)),
-    );
 
   return {
     hostThreadId: input.hostThreadId,
@@ -402,13 +352,10 @@ export const startCompare = Effect.fn("ThreadCompareService.startCompare")(funct
   },
 ) {
   const cached = completedCompareResults.get(input.commandId);
-  if (cached !== undefined) {
-    return cached;
-  }
+  if (cached !== undefined) return cached;
   const existing = inFlightCompareByCommandId.get(input.commandId);
-  if (existing !== undefined) {
-    return yield* Deferred.await(existing);
-  }
+  if (existing !== undefined) return yield* Deferred.await(existing);
+
   const deferred = yield* Deferred.make<
     OrchestrationV2StartCompareResult,
     OrchestrationV2StartCompareError
@@ -420,19 +367,15 @@ export const startCompare = Effect.fn("ThreadCompareService.startCompare")(funct
       ? input.hostThreadId
       : (input.hostThreadId ?? ThreadId.make(`compare:${shortKey(input.commandId)}`));
 
-  const exit = yield* withHostCompareLock(lockTarget, executeStartCompare(input)).pipe(
-    Effect.exit,
-    Effect.ensuring(
-      Effect.sync(() => {
+  return yield* withHostCompareLock(lockTarget, executeStartCompare(input)).pipe(
+    Effect.onExit((exit) =>
+      Effect.gen(function* () {
         if (inFlightCompareByCommandId.get(input.commandId) === deferred) {
           inFlightCompareByCommandId.delete(input.commandId);
         }
+        if (Exit.isSuccess(exit)) rememberCompareResult(input.commandId, exit.value);
+        yield* Deferred.done(deferred, exit);
       }),
     ),
   );
-  if (Exit.isSuccess(exit)) {
-    rememberCompareResult(input.commandId, exit.value);
-  }
-  yield* Deferred.done(deferred, exit);
-  return yield* exit;
 });

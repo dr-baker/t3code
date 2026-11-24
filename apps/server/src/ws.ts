@@ -2018,68 +2018,60 @@ export const layerWsRpc = (
         [WS_METHODS.issueTrackersConnect]: (input) => issueTrackers.connect(input),
         [WS_METHODS.issueTrackersBindProject]: (input) => issueTrackers.bindProject(input),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
-          command.type === "thread.compare.attach"
-            ? Effect.fail(
-                new OrchestrationV2DispatchCommandError({
-                  commandId: command.commandId,
-                  commandType: command.type,
-                  message: "thread.compare.attach is managed by orchestration.v2.startCompare.",
-                }),
-              )
-            : Effect.annotateCurrentSpan({
-                "orchestration_v2.command_id": command.commandId,
-                "orchestration_v2.command_type": command.type,
-                "orchestration_v2.thread_id":
-                  command.type === "thread.fork" || command.type === "thread.merge_back"
-                    ? command.targetThreadId
-                    : command.type === "delegated_task.request" ||
-                        command.type === "delegated_task.wake-policy" ||
-                        command.type === "delegated_task.completion-delivery.acknowledge" ||
-                        command.type === "delegated_task.completion-delivery.dispose" ||
-                        command.type === "thread.created.record"
-                      ? command.parentThreadId
-                      : command.threadId,
-                ...(command.type === "thread.fork" || command.type === "thread.merge_back"
-                  ? { "orchestration_v2.source_thread_id": command.sourceThreadId }
-                  : {}),
-              }).pipe(
-                Effect.andThen(
-                  startup
-                    .enqueueCommand(
-                      (command.type === "prepared-run.retry"
-                        ? threadLaunch.retryPreparation(command)
-                        : ThreadMessageIntake.dispatchCommand(
-                            ThreadManagementService.withCreationProvenance(command, {
-                              createdBy: "user",
-                              creationSource:
-                                "creationSource" in command ? command.creationSource : "web",
-                            }),
-                            {
-                              managesProviders:
-                                currentSession.scopes.includes(AuthProvidersManageScope),
-                            },
-                          )
-                      ).pipe(Effect.provide(intakeContext)),
-                    )
-                    .pipe(
-                      Effect.tap((result) =>
-                        result.replayed ? Effect.void : recordClientCommandAnalytics(command),
-                      ),
-                      Effect.map((result) => ({ sequence: result.sequence })),
-                      Effect.mapError((cause) => {
-                        if (cause._tag === "EnvironmentAuthorizationError") return cause;
-                        const detail = userFacingDispatchErrorMessage(cause);
-                        return new OrchestrationV2DispatchCommandError({
-                          commandId: command.commandId,
-                          commandType: command.type,
-                          message: detail ?? "Failed to dispatch orchestration V2 command",
-                          ...(detail === undefined ? {} : { detail }),
-                          cause,
-                        });
-                      }),
-                    ),
+          Effect.annotateCurrentSpan({
+            "orchestration_v2.command_id": command.commandId,
+            "orchestration_v2.command_type": command.type,
+            "orchestration_v2.thread_id":
+              command.type === "thread.fork" || command.type === "thread.merge_back"
+                ? command.targetThreadId
+                : command.type === "delegated_task.request" ||
+                    command.type === "delegated_task.wake-policy" ||
+                    command.type === "delegated_task.completion-delivery.acknowledge" ||
+                    command.type === "delegated_task.completion-delivery.dispose" ||
+                    command.type === "thread.created.record"
+                  ? command.parentThreadId
+                  : command.threadId,
+            ...(command.type === "thread.fork" || command.type === "thread.merge_back"
+              ? { "orchestration_v2.source_thread_id": command.sourceThreadId }
+              : {}),
+          }).pipe(
+            Effect.andThen(
+              startup
+                .enqueueCommand(
+                  (command.type === "prepared-run.retry"
+                    ? threadLaunch.retryPreparation(command)
+                    : ThreadMessageIntake.dispatchCommand(
+                        ThreadManagementService.withCreationProvenance(command, {
+                          createdBy: "user",
+                          creationSource:
+                            "creationSource" in command ? command.creationSource : "web",
+                        }),
+                        {
+                          managesProviders:
+                            currentSession.scopes.includes(AuthProvidersManageScope),
+                        },
+                      )
+                  ).pipe(Effect.provide(intakeContext)),
+                )
+                .pipe(
+                  Effect.tap((result) =>
+                    result.replayed ? Effect.void : recordClientCommandAnalytics(command),
+                  ),
+                  Effect.map((result) => ({ sequence: result.sequence })),
+                  Effect.mapError((cause) => {
+                    if (cause._tag === "EnvironmentAuthorizationError") return cause;
+                    const detail = userFacingDispatchErrorMessage(cause);
+                    return new OrchestrationV2DispatchCommandError({
+                      commandId: command.commandId,
+                      commandType: command.type,
+                      message: detail ?? "Failed to dispatch orchestration V2 command",
+                      ...(detail === undefined ? {} : { detail }),
+                      cause,
+                    });
+                  }),
                 ),
-              ),
+            ),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: (input) => threadManagement.stopWorkflow(input),
         [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: (input) =>
           threadManagement.forceStopThread(input),

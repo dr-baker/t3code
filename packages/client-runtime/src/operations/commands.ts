@@ -1404,6 +1404,12 @@ export type PickCompareWinnerInput = {
   readonly threadId: ThreadId;
   readonly winnerThreadId: ThreadId;
 } & CommandMetadata;
+export type UndoComparePickInput = { readonly threadId: ThreadId } & CommandMetadata;
+export type PopOutCompareContenderInput = {
+  readonly threadId: ThreadId;
+  readonly contenderThreadId: ThreadId;
+} & CommandMetadata;
+export type DropCompareContenderInput = PopOutCompareContenderInput;
 
 export const pickCompareWinner = Effect.fn("EnvironmentCommands.pickCompareWinner")(function* (
   input: PickCompareWinnerInput,
@@ -1415,11 +1421,6 @@ export const pickCompareWinner = Effect.fn("EnvironmentCommands.pickCompareWinne
     winnerThreadId: input.winnerThreadId,
   });
 });
-
-export type UndoComparePickInput = {
-  readonly threadId: ThreadId;
-} & CommandMetadata;
-
 export const undoComparePick = Effect.fn("EnvironmentCommands.undoComparePick")(function* (
   input: UndoComparePickInput,
 ) {
@@ -1429,12 +1430,6 @@ export const undoComparePick = Effect.fn("EnvironmentCommands.undoComparePick")(
     threadId: input.threadId,
   });
 });
-
-export type PopOutCompareContenderInput = {
-  readonly threadId: ThreadId;
-  readonly contenderThreadId: ThreadId;
-} & CommandMetadata;
-
 export const popOutCompareContender = Effect.fn("EnvironmentCommands.popOutCompareContender")(
   function* (input: PopOutCompareContenderInput) {
     return yield* dispatch({
@@ -1445,12 +1440,6 @@ export const popOutCompareContender = Effect.fn("EnvironmentCommands.popOutCompa
     });
   },
 );
-
-export type DropCompareContenderInput = {
-  readonly threadId: ThreadId;
-  readonly contenderThreadId: ThreadId;
-} & CommandMetadata;
-
 export const dropCompareContender = Effect.fn("EnvironmentCommands.dropCompareContender")(
   function* (input: DropCompareContenderInput) {
     return yield* dispatch({

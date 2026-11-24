@@ -757,10 +757,10 @@ export const make = Effect.gen(function* () {
       if (thread.deletedAt !== null || thread.settledOverride !== "settled") return;
       const settledAtMs = toMillis(thread.settledAt);
       if (settledAtMs === null || settleActionRunAt.get(threadId) === settledAtMs) return;
-      // The parent's worktree belongs to the parent; shared-worktree children
-      // skip duplicate cleanup there.
+      // The parent's worktree belongs to the parent; shared-worktree children and
+      // settled compare peers skip cleanup when another active thread shares the checkout.
       if (
-        thread.lineage.relationshipToParent === "subagent" &&
+        (thread.lineage.relationshipToParent === "subagent" || thread.lineage.compare === true) &&
         thread.lineage.parentThreadId !== null
       ) {
         const parent = yield* projections.getThread(thread.lineage.parentThreadId).pipe(
@@ -769,6 +769,23 @@ export const make = Effect.gen(function* () {
           }),
         );
         if (parent?.worktreePath === worktreePath) return;
+        const winnerId = parent?.compare?.selectedWinnerThreadId ?? null;
+        if (winnerId !== null && winnerId !== thread.id) {
+          const winner = yield* projections.getThread(winnerId).pipe(
+            Effect.catchTags({
+              ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+            }),
+          );
+          if (winner && winner.deletedAt === null && winner.worktreePath === worktreePath) return;
+        }
+      }
+      if (thread.compare?.selectedWinnerThreadId) {
+        const winner = yield* projections.getThread(thread.compare.selectedWinnerThreadId).pipe(
+          Effect.catchTags({
+            ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+          }),
+        );
+        if (winner && winner.deletedAt === null && winner.worktreePath === worktreePath) return;
       }
       const run = yield* projectScripts.runForThread({
         threadId,

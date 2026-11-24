@@ -557,7 +557,6 @@ it.effect("checks the destination operate grant for starting and choosing rewrit
     for (const type of [
       "thread.rewrites.start",
       "thread.rewrites.select",
-      "thread.compare.attach",
       "thread.compare.pick-winner",
       "thread.compare.undo-pick",
       "thread.compare.pop-out",

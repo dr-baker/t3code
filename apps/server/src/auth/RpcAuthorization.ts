@@ -293,13 +293,16 @@ const sendsProviderSignOutPrompt = (method: string, payload: unknown): boolean =
   }
   if (method === ORCHESTRATION_V2_WS_METHODS.startCompare) {
     const compare = payload as OrchestrationV2StartCompareInput;
-    if (compare.initialMessage !== undefined && isProviderSignOutPrompt(compare.initialMessage)) {
-      return true;
+    if (
+      compare.initialMessage === undefined &&
+      compare.contenders.every((s) => s.text === undefined)
+    ) {
+      return false;
     }
     const attachments = compare.initialMessage?.attachments ?? [];
-    return compare.contenders.some(
-      (spec) =>
-        spec.text !== undefined && isProviderSignOutPrompt({ text: spec.text, attachments }),
+    const fallbackText = compare.initialMessage?.text ?? "";
+    return compare.contenders.some((spec) =>
+      isProviderSignOutPrompt({ text: spec.text ?? fallbackText, attachments }),
     );
   }
   if (method !== ORCHESTRATION_V2_WS_METHODS.dispatchCommand) return false;

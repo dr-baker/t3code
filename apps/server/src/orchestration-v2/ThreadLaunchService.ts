@@ -129,7 +129,7 @@ export interface ThreadLaunchInput {
 
 type PreparationInput = Pick<
   ThreadLaunchInput,
-  "commandId" | "projectId" | "workspaceStrategy" | "initialMessage"
+  "commandId" | "projectId" | "workspaceStrategy" | "awaitWorkspacePreparation" | "initialMessage"
 > & {
   readonly reusedWorktree?: { readonly baseRef: string };
 };
@@ -1105,7 +1105,9 @@ const make = Effect.gen(function* () {
           );
       }
       yield* setupTracker.stageStatus(threadId, "agent", "done");
-      yield* awaitAsyncSetup;
+      if (!(input.awaitWorkspacePreparation === true && runId === null)) {
+        yield* awaitAsyncSetup;
+      }
       yield* setupTracker.finish(threadId, "done");
     }).pipe(
       Effect.onError((cause) =>

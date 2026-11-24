@@ -3862,13 +3862,6 @@ export const OrchestrationV2Command = Schema.Union([
     candidateThreadId: Schema.NullOr(ThreadId),
   }),
   Schema.Struct({
-    type: Schema.Literal("thread.compare.attach"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    contenderThreadIds: Schema.Array(ThreadId),
-    sourceRunId: Schema.NullOr(RunId),
-  }),
-  Schema.Struct({
     type: Schema.Literal("thread.compare.pick-winner"),
     commandId: CommandId,
     threadId: ThreadId,

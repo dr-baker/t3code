@@ -294,7 +294,11 @@ export function presentThreadShell(
   pendingSubagentRequest: PendingSubagentRequest | null = null,
   compareRollup: CompareHostRollup | null = null,
 ): EnvironmentThreadShell {
-  const updatedAt = iso(thread.updatedAt);
+  const updatedAt =
+    compareRollup?.latestCompletedAt != null &&
+    compareRollup.latestCompletedAt > iso(thread.updatedAt)
+      ? compareRollup.latestCompletedAt
+      : iso(thread.updatedAt);
   const ownLatestRun =
     thread.latestRunId === null
       ? null

@@ -110,7 +110,6 @@ export function clientRpcRequiredScopes(
     "type" in input &&
     (input.type === "thread.rewrites.start" ||
       input.type === "thread.rewrites.select" ||
-      input.type === "thread.compare.attach" ||
       input.type === "thread.compare.pick-winner" ||
       input.type === "thread.compare.undo-pick" ||
       input.type === "thread.compare.pop-out" ||

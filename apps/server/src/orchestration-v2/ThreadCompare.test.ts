@@ -98,13 +98,6 @@ it.effect(
         modelSelection: modelB,
         compareParentThreadId: hostId,
       });
-      yield* orchestrator.dispatch({
-        type: "thread.compare.attach",
-        commandId: CommandId.make("attach-compare"),
-        threadId: hostId,
-        contenderThreadIds: [c1, c2],
-        sourceRunId: null,
-      });
 
       const hostBefore = yield* orchestrator.getThreadShell(hostId);
       const c1Before = yield* orchestrator.getThreadShell(c1);
@@ -190,13 +183,6 @@ it.effect("pop-out and drop clean up an empty host while preserving remaining co
       title: "Explore",
       modelSelection: modelB,
       compareParentThreadId: hostId,
-    });
-    yield* orchestrator.dispatch({
-      type: "thread.compare.attach",
-      commandId: CommandId.make("attach-popout"),
-      threadId: hostId,
-      contenderThreadIds: [c1, c2],
-      sourceRunId: null,
     });
 
     // Pop out c1: c1 becomes listed, c2 stays in host.
@@ -342,13 +328,6 @@ it.effect("mid-thread compare fork inherits parent history and cascades archive/
         modelSelection,
       });
     }
-    yield* orchestrator.dispatch({
-      type: "thread.compare.attach",
-      commandId: CommandId.make("attach-mid"),
-      threadId: hostId,
-      contenderThreadIds: [c1, c2],
-      sourceRunId: runId,
-    });
 
     const c1Projection = yield* orchestrator.getThreadProjection(c1);
     assert.isNotNull(c1Projection);
@@ -428,37 +407,27 @@ it.effect(
         compareParentThreadId: hostId,
       });
 
-      // Self-reference and unrelated contenders are rejected.
+      // Self-reference and nested-host contender creation are rejected.
       const selfAttach = yield* Effect.exit(
-        orchestrator.dispatch({
-          type: "thread.compare.attach",
-          commandId: CommandId.make("attach-self"),
-          threadId: hostId,
-          contenderThreadIds: [hostId],
-          sourceRunId: null,
+        createThread({
+          id: ThreadId.make("self-parent"),
+          title: "Invalid self",
+          compareParentThreadId: ThreadId.make("self-parent"),
         }),
       );
       assert.strictEqual(selfAttach._tag, "Failure");
 
-      const unrelatedAttach = yield* Effect.exit(
-        orchestrator.dispatch({
-          type: "thread.compare.attach",
-          commandId: CommandId.make("attach-unrelated"),
-          threadId: hostId,
-          contenderThreadIds: [unrelated],
-          sourceRunId: null,
+      const nestedHost = yield* Effect.exit(
+        createThread({
+          id: ThreadId.make("nested-child"),
+          title: "Invalid nested",
+          compareParentThreadId: c1,
         }),
       );
-      assert.strictEqual(unrelatedAttach._tag, "Failure");
+      assert.strictEqual(nestedHost._tag, "Failure");
 
-      // Valid attach succeeds.
-      yield* orchestrator.dispatch({
-        type: "thread.compare.attach",
-        commandId: CommandId.make("attach-valid"),
-        threadId: hostId,
-        contenderThreadIds: [c1, c2],
-        sourceRunId: null,
-      });
+      assert.isTrue(isActiveCompareHost((yield* orchestrator.getThreadShell(hostId))!));
+      assert.isNotNull(yield* orchestrator.getThreadShell(unrelated));
 
       // Enable guest share on host before picking winner, then verify Pick + Undo does not revive it.
       yield* orchestrator.dispatch({
