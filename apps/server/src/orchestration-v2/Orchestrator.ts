@@ -7002,7 +7002,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ): OrchestrationV2AppThread => ({
       ...thread,
       ...extra,
-      archivedAt: thread.archivedAt ?? now,
+      archivedAt: extra?.archivedAt !== undefined ? extra.archivedAt : (thread.archivedAt ?? now),
       settledOverride: "settled",
       settledAt: now,
       unsettledAt: null,

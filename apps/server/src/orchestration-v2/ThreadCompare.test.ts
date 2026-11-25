@@ -14,6 +14,7 @@ import {
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
@@ -115,13 +116,22 @@ it.effect(
       assert.strictEqual(c1Before.lineage.parentThreadId, hostId);
       assert.isNotNull(hostBefore.pinnedAt);
 
-      // Pick c2 as winner.
-      yield* orchestrator.dispatch({
-        type: "thread.compare.pick-winner",
-        commandId: CommandId.make("pick-c2"),
-        threadId: hostId,
-        winnerThreadId: c2,
-      });
+      // Pick c2 as winner under a ticking clock (like real wall time between loser and host archive).
+      const baseClock = yield* Clock.Clock;
+      let tickMs = 1_700_000_000_000;
+      const tickingClock: Clock.Clock = {
+        ...baseClock,
+        currentTimeMillisUnsafe: () => ++tickMs,
+        currentTimeMillis: Effect.sync(() => ++tickMs),
+      };
+      yield* orchestrator
+        .dispatch({
+          type: "thread.compare.pick-winner",
+          commandId: CommandId.make("pick-c2"),
+          threadId: hostId,
+          winnerThreadId: c2,
+        })
+        .pipe(Effect.provideService(Clock.Clock, tickingClock));
 
       const hostAfterPick = yield* orchestrator.getThreadShell(hostId);
       const c1AfterPick = yield* orchestrator.getThreadShell(c1);
@@ -138,9 +148,10 @@ it.effect(
       assert.strictEqual(hostAfterPick.compare?.selectedWinnerThreadId, c2);
       assert.isFalse(isActiveCompareHost(hostAfterPick));
       assert.isNotNull(c1AfterPick.archivedAt);
+      assert.deepEqual(c1AfterPick.archivedAt, hostAfterPick.archivedAt);
       assert.strictEqual(c1AfterPick.settledOverride, "settled");
 
-      // Undo restores the exact compare state.
+      // Undo restores the exact compare state including unsettled loser state.
       yield* orchestrator.dispatch({
         type: "thread.compare.undo-pick",
         commandId: CommandId.make("undo-pick"),
@@ -154,9 +165,13 @@ it.effect(
       assert.isNotNull(c1AfterUndo);
       assert.isNotNull(c2AfterUndo);
       assert.isNull(hostAfterUndo.archivedAt);
+      assert.isNull(hostAfterUndo.settledAt);
+      assert.strictEqual(hostAfterUndo.settledOverride, "active");
       assert.isTrue(isActiveCompareHost(hostAfterUndo));
       assert.deepEqual(hostAfterUndo.compare?.contenderThreadIds, [c1, c2]);
       assert.isNull(c1AfterUndo.archivedAt);
+      assert.isNull(c1AfterUndo.settledAt);
+      assert.strictEqual(c1AfterUndo.settledOverride, "active");
       assert.isFalse(isListedThreadLineage(c1AfterUndo.lineage));
       assert.isFalse(isListedThreadLineage(c2AfterUndo.lineage));
       assert.strictEqual(c2AfterUndo.lineage.compare, true);
