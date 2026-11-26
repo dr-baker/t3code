@@ -517,3 +517,270 @@ it.effect(
       assert.strictEqual(undoAfterWinnerDeleted._tag, "Failure");
     }).pipe(Effect.provide(testLayer("compare-guards-and-guest-share"))),
 );
+
+it.effect(
+  "blocks sends while worktree prepares, blocks fork during active host run, restores side chats on undo, and deletes dropped contenders with host",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const hostId = ThreadId.make("hardening-host");
+      const finishedRunId = RunId.make("hardening-run-1");
+      const activeRunId = RunId.make("hardening-run-2");
+      const providerThreadId = ProviderThreadId.make("hardening-pt");
+
+      yield* createThread({ id: hostId, title: "Hardening host" });
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("h-pt"),
+            type: "provider-thread.updated",
+            threadId: hostId,
+            occurredAt: now,
+            payload: {
+              id: providerThreadId,
+              driver: codexDriver,
+              providerInstanceId: codexInstanceId,
+              providerSessionId: null,
+              appThreadId: hostId,
+              ownerNodeId: null,
+              nativeThreadRef: {
+                driver: codexDriver,
+                nativeId: "native-hardening",
+                strength: "strong",
+              },
+              nativeConversationHeadRef: null,
+              status: "idle",
+              firstRunOrdinal: 1,
+              lastRunOrdinal: 2,
+              handoffIds: [],
+              forkedFrom: null,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+          {
+            id: EventId.make("h-run-1"),
+            type: "run.created",
+            threadId: hostId,
+            runId: finishedRunId,
+            occurredAt: now,
+            payload: {
+              id: finishedRunId,
+              threadId: hostId,
+              ordinal: 1,
+              providerInstanceId: codexInstanceId,
+              modelSelection: modelA,
+              providerThreadId,
+              userMessageId: MessageId.make("h-u1"),
+              rootNodeId: null,
+              activeAttemptId: null,
+              status: "completed",
+              requestedAt: now,
+              startedAt: now,
+              completedAt: now,
+              checkpointId: null,
+              contextHandoffId: null,
+            },
+          },
+          {
+            id: EventId.make("h-run-2"),
+            type: "run.created",
+            threadId: hostId,
+            runId: activeRunId,
+            occurredAt: now,
+            payload: {
+              id: activeRunId,
+              threadId: hostId,
+              ordinal: 2,
+              providerInstanceId: codexInstanceId,
+              modelSelection: modelA,
+              providerThreadId,
+              userMessageId: MessageId.make("h-u2"),
+              rootNodeId: null,
+              activeAttemptId: null,
+              status: "running",
+              requestedAt: now,
+              startedAt: now,
+              completedAt: null,
+              checkpointId: null,
+              contextHandoffId: null,
+            },
+          },
+        ],
+      });
+
+      // Comparing an older finished run is rejected while a newer host run is active.
+      const blockedByActiveRun = yield* Effect.exit(
+        orchestrator.dispatch({
+          type: "thread.fork",
+          commandId: CommandId.make("fork-while-running"),
+          sourceThreadId: hostId,
+          targetThreadId: ThreadId.make("hardening-blocked"),
+          sourcePoint: { type: "run", runId: finishedRunId },
+          createdBy: "user",
+          creationSource: "web",
+          compare: true,
+          modelSelection: modelB,
+        }),
+      );
+      assert.strictEqual(blockedByActiveRun._tag, "Failure");
+
+      // Mark run 2 completed, fork with pendingWorkspacePreparation, and verify stray sends are rejected until bound.
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("h-run-2-done"),
+            type: "run.updated",
+            threadId: hostId,
+            runId: activeRunId,
+            occurredAt: now,
+            payload: {
+              id: activeRunId,
+              threadId: hostId,
+              ordinal: 2,
+              providerInstanceId: codexInstanceId,
+              modelSelection: modelA,
+              providerThreadId,
+              userMessageId: MessageId.make("h-u2"),
+              rootNodeId: null,
+              activeAttemptId: null,
+              status: "completed",
+              requestedAt: now,
+              startedAt: now,
+              completedAt: now,
+              checkpointId: null,
+              contextHandoffId: null,
+            },
+          },
+        ],
+      });
+
+      const sideChatId = ThreadId.make("hardening-sidechat");
+      yield* orchestrator.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("fork-sidechat"),
+        sourceThreadId: hostId,
+        targetThreadId: sideChatId,
+        sourcePoint: { type: "run", runId: activeRunId },
+        createdBy: "user",
+        creationSource: "web",
+        sideChat: true,
+      });
+
+      const c1 = ThreadId.make("hardening-c1");
+      const c2 = ThreadId.make("hardening-c2");
+      yield* orchestrator.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("fork-c1"),
+        sourceThreadId: hostId,
+        targetThreadId: c1,
+        sourcePoint: { type: "run", runId: finishedRunId },
+        createdBy: "user",
+        creationSource: "web",
+        compare: true,
+        clearWorktree: true,
+        pendingWorkspacePreparation: true,
+        modelSelection: modelA,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("fork-c2"),
+        sourceThreadId: hostId,
+        targetThreadId: c2,
+        sourcePoint: { type: "run", runId: finishedRunId },
+        createdBy: "user",
+        creationSource: "web",
+        compare: true,
+        modelSelection: modelB,
+      });
+
+      const straySend = yield* Effect.exit(
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("stray-send-before-wt"),
+          threadId: c1,
+          messageId: MessageId.make("stray-msg"),
+          text: "Too early",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        }),
+      );
+      assert.strictEqual(straySend._tag, "Failure");
+
+      // Binding worktreePath clears pendingWorkspacePreparation and allows normal sends.
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("bind-c1-wt"),
+        threadId: c1,
+        worktreePath: "/tmp/wt-c1",
+      });
+      const c1Bound = yield* orchestrator.getThreadProjection(c1);
+      assert.strictEqual(c1Bound?.thread.pendingWorkspacePreparation, undefined);
+
+      // Pick winner archives the host's ordinary side chat; Undo restores both loser and side chat.
+      yield* orchestrator.dispatch({
+        type: "thread.compare.pick-winner",
+        commandId: CommandId.make("hardening-pick"),
+        threadId: hostId,
+        winnerThreadId: c1,
+      });
+      assert.isNotNull((yield* orchestrator.getThreadShell(sideChatId))?.archivedAt);
+
+      yield* orchestrator.dispatch({
+        type: "thread.compare.undo-pick",
+        commandId: CommandId.make("hardening-undo"),
+        threadId: hostId,
+      });
+      assert.isNull((yield* orchestrator.getThreadShell(c2))?.archivedAt);
+      assert.isNull((yield* orchestrator.getThreadShell(sideChatId))?.archivedAt);
+
+      // Deleting a fresh compare host also deletes dropped new-mode contenders while preserving popped-out ones.
+      const freshHost = ThreadId.make("fresh-delete-host");
+      const droppedContender = ThreadId.make("fresh-dropped-c1");
+      const poppedContender = ThreadId.make("fresh-popped-c2");
+      const remainingContender = ThreadId.make("fresh-active-c3");
+      yield* createThread({ id: freshHost, title: "Fresh host" });
+      yield* createThread({
+        id: droppedContender,
+        title: "C1",
+        modelSelection: modelA,
+        compareParentThreadId: freshHost,
+      });
+      yield* createThread({
+        id: poppedContender,
+        title: "C2",
+        modelSelection: modelB,
+        compareParentThreadId: freshHost,
+      });
+      yield* createThread({
+        id: remainingContender,
+        title: "C3",
+        modelSelection: modelA,
+        compareParentThreadId: freshHost,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.compare.drop",
+        commandId: CommandId.make("fresh-drop-c1"),
+        threadId: freshHost,
+        contenderThreadId: droppedContender,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.compare.pop-out",
+        commandId: CommandId.make("fresh-pop-c2"),
+        threadId: freshHost,
+        contenderThreadId: poppedContender,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("delete-fresh-host"),
+        threadId: freshHost,
+      });
+      assert.isNotNull((yield* orchestrator.getThreadShell(droppedContender))?.deletedAt);
+      assert.isNotNull((yield* orchestrator.getThreadShell(remainingContender))?.deletedAt);
+      assert.isNull((yield* orchestrator.getThreadShell(poppedContender))?.deletedAt);
+    }).pipe(Effect.provide(testLayer("compare-hardening"))),
+);

@@ -65,6 +65,7 @@ export interface ThreadForkServiceV2Shape {
     readonly compare?: true;
     readonly modelSelection?: ModelSelection;
     readonly clearWorktree?: boolean;
+    readonly pendingWorkspacePreparation?: boolean;
     readonly createdBy: OrchestrationV2Actor;
     readonly creationSource: OrchestrationV2CreationSource;
     readonly createdAt: DateTime.Utc;
@@ -115,6 +116,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
       const {
         delegatedFrom: _delegatedFrom,
         compare: _compare,
+        pendingWorkspacePreparation: _pendingWorkspacePreparation,
         ...inherited
       } = input.sourceProjection.thread;
       const targetModelSelection = input.modelSelection ?? inherited.modelSelection;
@@ -123,6 +125,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
         providerInstanceId: targetModelSelection.instanceId,
         modelSelection: targetModelSelection,
         ...(input.clearWorktree ? { worktreePath: null } : {}),
+        ...(input.pendingWorkspacePreparation ? { pendingWorkspacePreparation: true } : {}),
         ...(input.rewrite ? { interactionMode: "default" as const } : {}),
         // PR context follows the conversation; watching remains the source thread's responsibility.
         pullRequests: input.sourceProjection.thread.pullRequests?.map(

@@ -100,7 +100,12 @@ export function withCreationProvenance(
       return { ...rest, ...provenance };
     }
     case "thread.fork": {
-      const { compare: _compare, clearWorktree: _clearWorktree, ...rest } = command;
+      const {
+        compare: _compare,
+        clearWorktree: _clearWorktree,
+        pendingWorkspacePreparation: _pendingWorkspacePreparation,
+        ...rest
+      } = command;
       return { ...rest, ...provenance };
     }
     case "message.dispatch":

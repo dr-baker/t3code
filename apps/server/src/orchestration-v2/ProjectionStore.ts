@@ -581,8 +581,15 @@ export interface ProjectionStoreV2Shape {
   /** Files thread deletion may remove; `includeShownByLiveFork` adds ones a live fork shows. */
   readonly getThreadAttachmentIds: (
     threadId: ThreadId,
-    options?: { readonly includeShownByLiveFork?: boolean },
+    options?: {
+      readonly includeShownByLiveFork?: boolean;
+      readonly excludeThreadIds?: ReadonlyArray<ThreadId>;
+    },
   ) => Effect.Effect<ReadonlyArray<string>, ProjectionStoreV2Error>;
+  /** Non-deleted side chats and unlisted compare contenders owned by `parentThreadId`. */
+  readonly getOwnedChildThreadIds: (
+    parentThreadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionStoreV2Error>;
   readonly getThreadHistoryPage: (
     threadId: ThreadId,
     cursor: string,
@@ -730,6 +737,7 @@ export interface ProjectionStoreV2Shape {
   ) => Effect.Effect<Record<ThreadId, string>, ProjectionStoreV2Error>;
   readonly getThreadWorktreePaths: (options?: {
     readonly includeArchived?: boolean;
+    readonly excludeSettled?: boolean;
   }) => Effect.Effect<
     ReadonlyArray<{ readonly threadId: ThreadId; readonly worktreePath: string }>,
     ProjectionStoreV2Error
@@ -7053,7 +7061,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           return candidateIds;
         }
         // Contenders started from a shared attachment may reference the same file id.
-        // Keep any file still referenced by another live thread's messages.
+        // Keep any file still referenced by another surviving thread's messages.
+        const excludedIds = Array.from(new Set([threadId, ...(options?.excludeThreadIds ?? [])]));
         const sharedByLiveSibling = yield* sql<{ id: string }>`
           SELECT DISTINCT json_extract(attachment.value, '$.id') AS id
           FROM orchestration_v2_projection_messages AS message
@@ -7061,7 +7070,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ON thread.thread_id = message.thread_id
           CROSS JOIN json_each(message.payload_json, '$.attachments') AS attachment
           WHERE thread.deleted_at IS NULL
-            AND message.thread_id != ${threadId}
+            AND message.thread_id NOT IN (
+              SELECT value FROM json_each(${encodeIdList(excludedIds)})
+            )
             AND json_extract(attachment.value, '$.id') IN (
               SELECT value FROM json_each(${encodeIdList(candidateIds)})
             )
@@ -7069,6 +7080,27 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         if (sharedByLiveSibling.length === 0) return candidateIds;
         const retainedBySiblings = new Set(sharedByLiveSibling.map((row) => row.id));
         return candidateIds.filter((id) => !retainedBySiblings.has(id));
+      },
+      (effect, threadId) =>
+        effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
+    );
+
+    const getOwnedChildThreadIds: ProjectionStoreV2Shape["getOwnedChildThreadIds"] = Effect.fn(
+      "ProjectionStore.getOwnedChildThreadIds",
+    )(
+      function* (parentThreadId) {
+        const rows = yield* sql<{ readonly thread_id: string }>`
+          SELECT thread_id
+          FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NULL
+            AND json_extract(payload_json, '$.lineage.parentThreadId') = ${parentThreadId}
+            AND (
+              json_extract(payload_json, '$.lineage.sideChat') = 1
+              OR json_extract(payload_json, '$.lineage.compare') = 1
+            )
+          ORDER BY thread_id ASC
+        `;
+        return rows.map((row) => ThreadId.make(row.thread_id));
       },
       (effect, threadId) =>
         effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
@@ -9407,6 +9439,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         FROM orchestration_v2_projection_threads
         WHERE deleted_at IS NULL
           ${options?.includeArchived === true ? sql`` : sql`AND archived_at IS NULL`}
+          ${options?.excludeSettled === true ? sql`AND json_extract(payload_json, '$.settledOverride') IS NOT 'settled'` : sql``}
           AND json_extract(payload_json, '$.worktreePath') IS NOT NULL
       `.pipe(
         Effect.map((rows) =>
@@ -10300,6 +10333,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       searchThread: readOnReader(searchThread),
       searchThreadStream,
       getThreadAttachmentIds: readOnReader(getThreadAttachmentIds),
+      getOwnedChildThreadIds: readOnReader(getOwnedChildThreadIds),
     } satisfies ProjectionStoreV2Shape;
   }),
 );

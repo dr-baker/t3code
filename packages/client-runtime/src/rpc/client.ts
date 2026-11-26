@@ -208,7 +208,7 @@ export class RpcPermissionGuard extends Context.Reference<{
   }),
 }) {}
 
-const authorizeRequest = Effect.fn("EnvironmentRpc.authorize")(function* (
+export const authorizeRequest = Effect.fn("EnvironmentRpc.authorize")(function* (
   method: string,
   input: unknown,
 ) {

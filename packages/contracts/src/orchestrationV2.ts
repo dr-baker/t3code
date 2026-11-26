@@ -563,6 +563,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  /** True while a newly forked compare contender awaits its initial worktree binding. */
+  pendingWorkspacePreparation: Schema.optional(Schema.Boolean),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   threadWatches: Schema.optional(
@@ -2465,6 +2467,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  /** True while a newly forked compare contender awaits its initial worktree binding. */
+  pendingWorkspacePreparation: Schema.optional(Schema.Boolean),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   threadWatches: Schema.optional(
@@ -3896,6 +3900,7 @@ export const OrchestrationV2Command = Schema.Union([
     compare: Schema.optional(Schema.Literal(true)),
     modelSelection: Schema.optional(ModelSelection),
     clearWorktree: Schema.optional(Schema.Boolean),
+    pendingWorkspacePreparation: Schema.optional(Schema.Boolean),
     createdAt: Schema.optional(Schema.DateTimeUtc),
   }),
   Schema.Struct({
@@ -4392,6 +4397,8 @@ export class OrchestrationV2StartCompareError extends Schema.TaggedError<Orchest
   {
     commandId: CommandId,
     message: Schema.String,
+    /** True when validation failed or all contenders failed and any created host was deleted. */
+    rolledBack: Schema.optional(Schema.Boolean),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}

@@ -44,6 +44,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import {
+  authorizeRequest,
   EnvironmentRpcUnavailableError,
   getInitialServerConfig,
   isRpcClientError,
@@ -1349,6 +1350,7 @@ export type StartCompareInput =
 export const startCompare = Effect.fn("EnvironmentCommands.startCompare")(function* (
   input: StartCompareInput,
 ) {
+  yield* authorizeRequest(ORCHESTRATION_V2_WS_METHODS.startCompare, input);
   const commandId = yield* allocateCommandId(input);
   const hostThreadId = input.hostThreadId ?? ThreadId.make(`compare:${commandId.slice(-12)}`);
   const initialMessage =

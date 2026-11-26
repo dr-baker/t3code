@@ -1941,32 +1941,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   /** Side chats and unlisted compare contenders live inside their parent, so deleting or archiving the parent takes them too. */
   const liveSideChatIds = Effect.fn("Orchestrator.liveSideChatIds")(
     function* (threadId: ThreadId) {
-      const { thread: parent, contextTransfers } = yield* projectionStore
-        .getThreadRecords(threadId, ["contextTransfers"])
-        .pipe(
-          Effect.catchTags({
-            ProjectionStoreThreadNotFoundError: () =>
-              Effect.succeed({ thread: null, contextTransfers: [] }),
-          }),
-        );
-      const childIds = new Set<ThreadId>();
-      for (const transfer of contextTransfers) {
-        if (transfer.type !== "fork" || transfer.sourceThreadId !== threadId) continue;
-        const child = yield* projectionStore.findThread(transfer.targetThreadId);
-        if (
-          (child?.lineage.sideChat === true || child?.lineage.compare === true) &&
-          child.deletedAt === null
-        ) {
-          childIds.add(child.id);
-        }
-      }
-      for (const contenderId of parent?.compare?.contenderThreadIds ?? []) {
-        const child = yield* projectionStore.findThread(contenderId);
-        if (child?.lineage.compare === true && child.deletedAt === null) {
-          childIds.add(child.id);
-        }
-      }
-      return Array.from(childIds).toSorted((left, right) => left.localeCompare(right));
+      return yield* projectionStore.getOwnedChildThreadIds(threadId);
     },
     (effect, threadId) =>
       effect.pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
@@ -5190,7 +5165,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
           ),
         );
-      const latestRunCompletedAt = shell?.latestRunCompletedAt ?? null;
+      let latestRunCompletedAt = shell?.latestRunCompletedAt ?? null;
+      if (
+        thread.deletedAt === null &&
+        thread.archivedAt === null &&
+        thread.compare != null &&
+        thread.compare.contenderThreadIds.length > 0 &&
+        thread.compare.selectedWinnerThreadId === null
+      ) {
+        for (const contenderId of thread.compare.contenderThreadIds) {
+          const contenderShell = yield* projectionStore
+            .getThreadShell(contenderId)
+            .pipe(
+              Effect.mapError(
+                (cause) => new OrchestratorProjectionError({ threadId: contenderId, cause }),
+              ),
+            );
+          const completedAt = contenderShell?.latestRunCompletedAt ?? null;
+          if (
+            completedAt !== null &&
+            (latestRunCompletedAt === null ||
+              DateTime.toEpochMillis(completedAt) > DateTime.toEpochMillis(latestRunCompletedAt))
+          ) {
+            latestRunCompletedAt = completedAt;
+          }
+        }
+      }
       if (latestRunCompletedAt === null) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -5365,8 +5365,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     snooze: command.limitRecovery.snooze ?? previousRecovery?.snooze ?? false,
                     requestId: command.commandId,
                   };
+          const {
+            pendingWorkspacePreparation: _pendingWorkspacePreparation,
+            ...threadWithoutPendingWorkspace
+          } = thread;
+          const baseThread =
+            command.worktreePath !== undefined ? threadWithoutPendingWorkspace : thread;
           return {
-            ...thread,
+            ...baseThread,
             ...(command.title === undefined ? {} : { title: command.title, titleRenamed: true }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
             ...(command.limitRecovery !== undefined &&
@@ -6425,6 +6431,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.compare ? { compare: true } : {}),
         ...(command.modelSelection === undefined ? {} : { modelSelection: command.modelSelection }),
         ...(command.clearWorktree ? { clearWorktree: true } : {}),
+        ...(command.pendingWorkspacePreparation ? { pendingWorkspacePreparation: true } : {}),
         createdBy: command.createdBy,
         creationSource: command.creationSource,
         createdAt: now,
@@ -6912,6 +6919,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return yield* reject("This thread already has an active comparison from another turn.");
     }
     const existing = host.compare?.contenderThreadIds ?? [];
+    if (existing.length === 0 && input.sourceRunId !== null) {
+      const hostRecords = yield* projectionStore
+        .getThreadRecords(input.hostThreadId, ["runs", "runtimeRequests"])
+        .pipe(mapDispatchError(input.command));
+      if (
+        hostRecords.runs.some(
+          (run) =>
+            run.status === "preparing" ||
+            run.status === "queued" ||
+            run.status === "starting" ||
+            run.status === "running" ||
+            run.status === "waiting",
+        )
+      ) {
+        return yield* reject(
+          "Wait for active or queued runs on this thread to finish before starting a comparison.",
+        );
+      }
+      if (hostRecords.runtimeRequests.some((request) => request.status === "pending")) {
+        return yield* reject(
+          "Resolve pending approvals or questions on this thread before starting a comparison.",
+        );
+      }
+    }
     const merged = existing.includes(input.contenderThreadId)
       ? existing
       : [...existing, input.contenderThreadId];
@@ -7253,6 +7284,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               updatedAt: now,
             },
           });
+        }
+        const hostSideChatIds = yield* liveSideChatIds(host.id);
+        for (const sideChatId of hostSideChatIds) {
+          if (compare.contenderThreadIds.includes(sideChatId)) continue;
+          const sideChat = yield* findThread(sideChatId);
+          if (
+            !sideChat ||
+            sideChat.deletedAt !== null ||
+            sideChat.lineage.sideChat !== true ||
+            sideChat.archivedAt === null ||
+            hostArchivedAt === null ||
+            DateTime.toEpochMillis(sideChat.archivedAt) < DateTime.toEpochMillis(hostArchivedAt)
+          ) {
+            continue;
+          }
+          yield* dispatchThreadMutation(
+            {
+              type: "thread.unarchive",
+              commandId: CommandId.make(`${command.commandId}:sidechat:${sideChat.id}:unarchive`),
+              threadId: sideChat.id,
+            },
+            events,
+            effects,
+          );
         }
         return;
       }
@@ -8194,6 +8249,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         : undefined,
     );
+    if (
+      projection.thread.pendingWorkspacePreparation === true &&
+      command.dispatchMode.type !== "defer_start"
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Worktree setup is still preparing for this model. Try again in a moment.",
+      });
+    }
     if (command.steerFollowUpOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);
       if (
@@ -16842,6 +16907,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       case "thread.delete": {
         const now = yield* DateTime.now;
+        const deleteThreadIds = [command.threadId, ...sideChatIds];
+        const claimedAttachmentIds = new Set<string>();
         const planDeletion = Effect.fn("Orchestrator.planDeletion")(function* (
           deletion: typeof command,
         ) {
@@ -16863,13 +16930,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             yield* reconcileDeletedRewrite(command, projection.thread, events, now);
             yield* reconcileDeletedCompareContender(command, projection.thread, events, now);
           }
+          const rawAttachmentIds = yield* projectionStore
+            .getThreadAttachmentIds(deletion.threadId, { excludeThreadIds: deleteThreadIds })
+            .pipe(mapDispatchError(command));
+          const attachmentIds = rawAttachmentIds.filter((id) => {
+            if (claimedAttachmentIds.has(id)) return false;
+            claimedAttachmentIds.add(id);
+            return true;
+          });
           return yield* mapDispatchError(command)(
             planThreadDeletion({
               command: deletion,
               projection,
-              attachmentIds: yield* projectionStore
-                .getThreadAttachmentIds(deletion.threadId)
-                .pipe(mapDispatchError(command)),
+              attachmentIds,
               now,
               idAllocator,
             }),
@@ -17704,7 +17777,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.threadId,
         Effect.all([
           liveCompareContenderIds(command.threadId),
-          command.type === "thread.compare.pick-winner"
+          command.type === "thread.compare.pick-winner" ||
+          command.type === "thread.compare.undo-pick"
             ? liveSideChatIds(command.threadId)
             : Effect.succeed([] as ReadonlyArray<ThreadId>),
         ]).pipe(
