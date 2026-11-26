@@ -8,6 +8,7 @@ import {
   threadRuntimeIsActive,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { createThreadVisitTracker } from "@t3tools/client-runtime/state/thread-visits";
 import {
   AuthOrchestrationOperateScope,
@@ -30,6 +31,7 @@ import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironmentScope } from "../../state/session";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { showThreadUndoNotice } from "../home/thread-undo-notice";
 import { useWorkspaceBackNavigation } from "../layout/workspace/useAndroidWorkspaceNavigation";
 import { ThreadScreenFallback } from "./ThreadScreenHost";
 
@@ -58,12 +60,14 @@ function useMobileComparePick(environmentId: EnvironmentId, hostThreadId: Thread
   const pick = async (winnerThreadId: ThreadId, navigateToWinner: boolean) => {
     if (busy || !canOperate) return;
     setBusy(true);
+    const claim = ThreadUndo.begin("compare", `${environmentId}/${hostThreadId}`);
     const result = await pickWinner({
       environmentId,
       input: { threadId: hostThreadId, winnerThreadId },
     });
     setBusy(false);
     if (result._tag === "Failure") {
+      claim.finish();
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         Dialog.alert(
@@ -74,17 +78,29 @@ function useMobileComparePick(environmentId: EnvironmentId, hostThreadId: Thread
       return;
     }
     if (navigateToWinner) replaceThread(winnerThreadId);
-    Dialog.alert(gt("Picked winner"), gt("Other models were settled."), [
-      {
-        text: gt("Undo"),
-        onPress: () => {
-          void undoPick({ environmentId, input: { threadId: hostThreadId } }).then((undoResult) => {
-            if (undoResult._tag === "Success") replaceThread(hostThreadId);
-          });
-        },
+    showThreadUndoNotice({
+      action: "Picked",
+      claim,
+      undo: async () => {
+        const undoResult = await undoPick({ environmentId, input: { threadId: hostThreadId } });
+        if (undoResult._tag === "Failure") {
+          if (!isAtomCommandInterrupted(undoResult)) {
+            const error = squashAtomCommandFailure(undoResult);
+            Dialog.alert(
+              gt("Could not undo winner pick"),
+              error instanceof Error ? error.message : undefined,
+            );
+          }
+          return;
+        }
+        // When picked from a pushed contender screen, pop back to the existing host route instead of duplicating it.
+        if (!navigateToWinner && navigation.canGoBack()) {
+          navigation.goBack();
+        } else {
+          replaceThread(hostThreadId);
+        }
       },
-      { text: gt("Done"), style: "cancel" },
-    ]);
+    });
   };
 
   return { canOperate, busy, setBusy, pick, replaceThread };

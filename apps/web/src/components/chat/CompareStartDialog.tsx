@@ -5,8 +5,10 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   MODEL_COMPARE_LIMITS,
+  resolveProjectProviderInstanceEnabled,
   type EnvironmentId,
   type ModelSelection,
+  type ProjectId,
   type RunId,
   type ServerProvider,
   type ThreadId,
@@ -44,6 +46,7 @@ interface CompareStartDialogProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId | null;
   readonly hostThreadId: ThreadId;
   readonly sourceRunId: RunId | null;
   readonly currentModelSelection: ModelSelection | null;
@@ -58,6 +61,7 @@ export function CompareStartDialog(props: CompareStartDialogProps) {
     open,
     onOpenChange,
     environmentId,
+    projectId,
     hostThreadId,
     sourceRunId,
     currentModelSelection,
@@ -72,15 +76,14 @@ export function CompareStartDialog(props: CompareStartDialogProps) {
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(environmentId));
   const startCompare = useAtomCommand(threadEnvironment.startCompare, { reportFailure: false });
   const providers: ReadonlyArray<ServerProvider> = (config?.providers ?? []).filter(
-    (provider) => provider.enabled && provider.status === "ready" && provider.models.length > 0,
+    (provider) =>
+      provider.enabled &&
+      provider.status === "ready" &&
+      provider.models.length > 0 &&
+      (settings === null ||
+        resolveProjectProviderInstanceEnabled(settings, projectId, provider.instanceId)),
   );
-  const [selected, setSelected] = useState<ReadonlyArray<ModelSelection>>(() =>
-    defaultCompareSelections({
-      providers,
-      currentSelection: currentModelSelection,
-      rewriteCouncil: settings?.rewriteCouncil,
-    }),
-  );
+  const [selected, setSelected] = useState<ReadonlyArray<ModelSelection>>([]);
   const [useWorktrees, setUseWorktrees] = useState(isGitRepo && baseBranch !== null);
   const [promptText, setPromptText] = useState("");
   const [submitting, setSubmitting] = useState(false);

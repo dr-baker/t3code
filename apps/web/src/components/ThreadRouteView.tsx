@@ -215,12 +215,14 @@ export function ThreadRouteView({
     // Before the shell bootstraps, a listed visible thread can still look off-shell.
     if (bootstrapComplete && unlistedThread !== null) redirect = <Navigate to="/" replace />;
   } else if (renderState === "ready" || (renderState === "loading" && serverThreadShell !== null)) {
-    const compareHostActive = isActiveCompareHost(serverThreadShell ?? unlistedThread);
+    const resolvedCompareHost = serverThreadShell ?? unlistedThread;
+    const compareHostActive = isActiveCompareHost(resolvedCompareHost);
     view = compareHostActive ? (
       <CompareThreadView
         key={`compare:${target.threadRef.environmentId}:${target.threadRef.threadId}`}
         environmentId={target.threadRef.environmentId}
         threadId={target.threadRef.threadId}
+        fallbackHostShell={resolvedCompareHost}
       />
     ) : (
       <ChatView

@@ -9,10 +9,12 @@ import {
   threadRuntimeIsActive,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import {
   AuthOrchestrationOperateScope,
   isActiveCompareHost,
   type EnvironmentId,
+  type MessageId,
   type ScopedThreadRef,
   type ServerProvider,
   type ThreadId,
@@ -29,9 +31,11 @@ import {
   TerminalIcon,
   XIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { showThreadUndoNotice } from "../../hooks/showThreadUndoNotice";
 import { ComposerHandleContext } from "../../composerHandleContext";
 import type { SideChatParentPanel } from "../../lib/sideChatPane";
 import { cn, newMessageId } from "../../lib/utils";
@@ -44,6 +48,7 @@ import { environmentThreadShells, threadEnvironment } from "../../state/threads"
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useEnvironmentQuery } from "../../state/query";
 import { vcsEnvironment, vcsStatusRevalidation } from "../../state/vcs";
+import { waitForAtomValue } from "../../state/waitForAtomValue";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import {
@@ -64,7 +69,6 @@ import { ThreadVisitWatermark } from "./ThreadVisitWatermark";
 import {
   CompareColumnContext,
   resolveFocusedContenderId,
-  summarizeCompareContenders,
   type CompareBroadcastControl,
   type CompareBroadcastPayload,
 } from "./compareThread.logic";
@@ -317,6 +321,7 @@ function CompareContenderColumn(props: CompareContenderColumnProps) {
             value={{
               broadcast: broadcastControl,
               rightPanelPortalTarget: focused ? rightPanelPortalTarget : null,
+              onFocus: () => onFocus(contenderId),
             }}
           >
             <ChatView
@@ -336,14 +341,21 @@ function CompareContenderColumn(props: CompareContenderColumnProps) {
 export function CompareThreadView(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  readonly fallbackHostShell?:
+    | (Pick<EnvironmentThreadShell, "projectId" | "title" | "runtimeMode" | "interactionMode"> & {
+        readonly compare?: EnvironmentThreadShell["compare"] | undefined;
+      })
+    | null;
 }) {
   const { environmentId, threadId } = props;
   const gt = useGT();
   const navigate = useNavigate();
   const router = useRouter();
+  const isDesktop = useMediaQuery("md");
   const handleNewThread = useNewThreadHandler();
   const hostRef = scopeThreadRef(environmentId, threadId);
-  const hostShell = useQuietThreadShell(hostRef);
+  const liveHostShell = useQuietThreadShell(hostRef);
+  const hostShell = liveHostShell ?? props.fallbackHostShell ?? null;
   const project = useProject(
     hostShell?.projectId ? scopeProjectRef(environmentId, hostShell.projectId) : null,
   );
@@ -363,6 +375,11 @@ export function CompareThreadView(props: {
   const [focusedState, setFocusedState] = useState<ThreadId | null>(null);
   const [busyAction, setBusyAction] = useState(false);
   const [rightPanelPortalTarget, setRightPanelPortalTarget] = useState<HTMLDivElement | null>(null);
+  // Retains failed targets + message IDs so retrying after a partial broadcast never double-sends.
+  const pendingFailedBroadcastRef = useRef<{
+    readonly text: string;
+    readonly targets: ReadonlyMap<ThreadId, MessageId>;
+  } | null>(null);
 
   const focusedContenderId = resolveFocusedContenderId(contenderIds, focusedState);
   const focusedContenderRef: ScopedThreadRef | null = focusedContenderId
@@ -406,35 +423,56 @@ export function CompareThreadView(props: {
   const handleBroadcast = async (payload: CompareBroadcastPayload): Promise<boolean> => {
     const text = payload.text.trim();
     if (text.length === 0 || contenderIds.length === 0) return false;
-    const results = await Promise.all(
-      contenderIds.map((contenderId) =>
-        startTurn({
+    const previousFailed = pendingFailedBroadcastRef.current;
+    const targetEntries: ReadonlyArray<readonly [ThreadId, MessageId]> =
+      previousFailed !== null && previousFailed.text === text
+        ? contenderIds.flatMap((id) => {
+            const messageId = previousFailed.targets.get(id);
+            return messageId !== undefined ? ([[id, messageId]] as const) : [];
+          })
+        : contenderIds.map((id) => [id, newMessageId()] as const);
+    if (targetEntries.length === 0) {
+      pendingFailedBroadcastRef.current = null;
+      return true;
+    }
+    const outcomes = await Promise.all(
+      targetEntries.map(async ([contenderId, messageId]) => ({
+        contenderId,
+        messageId,
+        result: await startTurn({
           environmentId,
           input: {
             threadId: contenderId,
-            message: { messageId: newMessageId(), role: "user", text, attachments: [] },
+            message: { messageId, role: "user", text, attachments: [] },
             runtimeMode: hostShell?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
             interactionMode: hostShell?.interactionMode ?? DEFAULT_INTERACTION_MODE,
             dispatchMode: "auto",
           },
         }),
-      ),
+      })),
     );
-    const failures = results.filter((result) => result._tag === "Failure");
-    if (failures.length === results.length) {
-      toastManager.add({ type: "error", title: gt("Could not send to models") });
-      return false;
+    const failed = outcomes.filter((item) => item.result._tag === "Failure");
+    if (failed.length === 0) {
+      pendingFailedBroadcastRef.current = null;
+      return true;
     }
-    if (failures.length > 0) {
+    pendingFailedBroadcastRef.current = {
+      text,
+      targets: new Map(failed.map((item) => [item.contenderId, item.messageId] as const)),
+    };
+    if (failed.length === outcomes.length) {
+      toastManager.add({ type: "error", title: gt("Could not send to models") });
+    } else {
       toastManager.add({
         type: "warning",
         title: gt("Sent to {sent} of {total} models", {
-          sent: results.length - failures.length,
-          total: results.length,
+          sent: outcomes.length - failed.length,
+          total: outcomes.length,
         }),
+        description: gt("Send again to retry only the failed models."),
       });
     }
-    return true;
+    return false;
   };
 
   const runCompareAction = async <A, E>(
@@ -465,40 +503,27 @@ export function CompareThreadView(props: {
       () => pickWinner({ environmentId, input: { threadId, winnerThreadId } }),
       gt("Could not pick winner"),
       () => {
+        const claim = ThreadUndo.begin("compare", `${environmentId}/${threadId}`);
         openThread(winnerThreadId);
-        toastManager.add({
-          type: "success",
-          title: gt("Picked winner. Other models settled."),
-          timeout: 6000,
-          actionProps: {
-            children: gt("Undo"),
-            onClick: () => {
-              void undoPick({ environmentId, input: { threadId } }).then((undoResult) => {
-                if (undoResult._tag !== "Success") return;
-                const hostAtom = environmentThreadShells.threadShellAtom(hostRef);
-                const navigateToHost = () =>
-                  void router.navigate({
-                    to: "/$environmentId/$threadId",
-                    params: buildThreadRouteParams(hostRef),
-                  });
-                if (isActiveCompareHost(appAtomRegistry.get(hostAtom))) {
-                  navigateToHost();
-                  return;
-                }
-                let done = false;
-                const finish = () => {
-                  if (done) return;
-                  done = true;
-                  unsubscribe();
-                  clearTimeout(fallbackTimer);
-                  navigateToHost();
-                };
-                const unsubscribe = appAtomRegistry.subscribe(hostAtom, (shell) => {
-                  if (isActiveCompareHost(shell)) finish();
-                });
-                const fallbackTimer = setTimeout(finish, 2000);
+        showThreadUndoNotice({
+          action: "Picked",
+          claim,
+          failureTitle: gt("Could not undo winner pick"),
+          undo: async () => {
+            const undoResult = await undoPick({ environmentId, input: { threadId } });
+            if (undoResult._tag === "Success") {
+              await waitForAtomValue({
+                registry: appAtomRegistry,
+                atom: environmentThreadShells.threadShellAtom(hostRef),
+                predicate: isActiveCompareHost,
+                timeoutMs: 2_000,
               });
-            },
+              void router.navigate({
+                to: "/$environmentId/$threadId",
+                params: buildThreadRouteParams(hostRef),
+              });
+            }
+            return undoResult;
           },
         });
       },
@@ -527,10 +552,13 @@ export function CompareThreadView(props: {
       gt("Could not remove model"),
     );
 
-  const rollup = hostShell?.compareRollup;
-  const summary = rollup
-    ? { active: rollup.activeCount, ready: rollup.readyCount }
-    : summarizeCompareContenders([]);
+  const rollup = liveHostShell?.compareRollup;
+  const summary = { active: rollup?.activeCount ?? 0, ready: rollup?.readyCount ?? 0 };
+  const renderedContenderIds = isDesktop
+    ? contenderIds
+    : focusedContenderId !== null
+      ? [focusedContenderId]
+      : [];
 
   const toggleFocusedPanel = (kind: "diff" | "files") => {
     if (!focusedContenderRef) return;
@@ -659,15 +687,12 @@ export function CompareThreadView(props: {
       </div>
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        {/* Desktop: side-by-side multi-column grid with readable min width; Narrow: focused column only */}
+        {/* Desktop: side-by-side multi-column grid with readable min width; Narrow: mount focused column only */}
         <div className="min-h-0 min-w-0 flex-1 overflow-x-auto md:grid md:auto-cols-[minmax(24rem,1fr)] md:grid-flow-col">
-          {contenderIds.map((contenderId) => {
+          {renderedContenderIds.map((contenderId) => {
             const focused = contenderId === focusedContenderId;
             return (
-              <div
-                key={contenderId}
-                className={cn("h-full min-h-0 min-w-0", !focused && "hidden md:block")}
-              >
+              <div key={contenderId} className="h-full min-h-0 min-w-0">
                 <CompareContenderColumn
                   environmentId={environmentId}
                   hostThreadId={threadId}

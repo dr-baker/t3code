@@ -212,7 +212,16 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
           },
         });
         if (compareResult._tag === "Failure") {
-          throw squashAtomCommandFailure(compareResult);
+          const failure = squashAtomCommandFailure(compareResult);
+          if (
+            typeof failure === "object" &&
+            failure !== null &&
+            "rolledBack" in failure &&
+            (failure as { rolledBack?: unknown }).rolledBack === true
+          ) {
+            uncertainSubmissionsRef.current.delete(retryKey);
+          }
+          throw failure;
         }
         uncertainSubmissionsRef.current.delete(retryKey);
         sendInFlightRef.current = false;

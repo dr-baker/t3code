@@ -1,8 +1,6 @@
 import { createContext } from "react";
 import type { ModelSelection, ServerProvider, ThreadId } from "@t3tools/contracts";
 import { MODEL_COMPARE_LIMITS } from "@t3tools/contracts";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
 import { createModelSelection } from "@t3tools/shared/model";
 
 export interface CompareBroadcastPayload {
@@ -18,6 +16,7 @@ export interface CompareBroadcastControl {
 export interface CompareColumnContextValue {
   readonly broadcast: CompareBroadcastControl;
   readonly rightPanelPortalTarget: HTMLElement | null;
+  readonly onFocus: () => void;
 }
 
 export const CompareColumnContext = createContext<CompareColumnContextValue | null>(null);
@@ -117,41 +116,4 @@ export function defaultCompareSelections(input: {
     if (picked.length >= maxDefaults) break;
   }
   return picked;
-}
-
-export interface CompareStageSummary {
-  readonly total: number;
-  readonly active: number;
-  readonly ready: number;
-  readonly failed: number;
-  readonly needsAttention: number;
-}
-
-export function summarizeCompareContenders(
-  contenders: ReadonlyArray<EnvironmentThreadShell | null>,
-): CompareStageSummary {
-  let active = 0;
-  let ready = 0;
-  let failed = 0;
-  let needsAttention = 0;
-  for (const shell of contenders) {
-    if (!shell) continue;
-    if (shell.hasPendingApprovals || shell.hasPendingUserInput) {
-      needsAttention += 1;
-    }
-    if (threadRuntimeIsActive(shell.runtime)) {
-      active += 1;
-    } else if (shell.latestRun?.status === "failed") {
-      failed += 1;
-    } else if (shell.latestRun !== null) {
-      ready += 1;
-    }
-  }
-  return {
-    total: contenders.length,
-    active,
-    ready,
-    failed,
-    needsAttention,
-  };
 }

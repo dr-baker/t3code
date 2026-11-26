@@ -2967,9 +2967,11 @@ export default function ChatView(props: ChatViewProps) {
       if (activeThread) setThreadError(activeThread.id, message);
     },
   });
-  // An embedded thread's commands run in its host's terminal, which is the host's checkout.
+  // Side chats share their host's terminal; compare columns own their own terminal and checkout.
   const runsOutsideHostCheckout =
-    embedded && (activeThread?.worktreePath ?? null) !== (panelHostShell?.worktreePath ?? null);
+    embedded &&
+    compareColumn === null &&
+    (activeThread?.worktreePath ?? null) !== (panelHostShell?.worktreePath ?? null);
   // A maximized panel covers the terminal drawer the command runs in.
   const runSideChatShellCommandStable = useStableCallback((command: string) => {
     if (activeThreadRef) useRightPanelStore.getState().setMaximized(activeThreadRef, false);
@@ -3603,7 +3605,14 @@ export default function ChatView(props: ChatViewProps) {
                   onCiteAssistantText={citeAssistantTextStable}
                   onReplyToResponse={replyToResponseStable}
                   {...(activeProject && !runsOutsideHostCheckout
-                    ? { onRunShellCommand: parentPanel?.runShellCommand ?? runShellCommandStable }
+                    ? {
+                        onRunShellCommand: compareColumn
+                          ? (command: string) => {
+                              compareColumn.onFocus();
+                              runShellCommandStable(command);
+                            }
+                          : (parentPanel?.runShellCommand ?? runShellCommandStable),
+                      }
                     : {})}
                   isWorking={isWorking}
                   runlessWorkActive={runlessWorkStartedAt !== null}
@@ -3659,7 +3668,14 @@ export default function ChatView(props: ChatViewProps) {
                   routeThreadKey={displayedTimelineKey}
                   displayThreadKey={displayedTimelineKey}
                   announceTurnStatus={!isProviderSubagent}
-                  onOpenToolDiff={parentPanel?.openToolDiff ?? onOpenToolDiffStable}
+                  onOpenToolDiff={
+                    compareColumn
+                      ? (target) => {
+                          compareColumn.onFocus();
+                          onOpenToolDiffStable(target);
+                        }
+                      : (parentPanel?.openToolDiff ?? onOpenToolDiffStable)
+                  }
                   // Side chat runs keep no checkpoints to diff, and a fork would promote the side chat.
                   // Compare contenders keep checkpoints so their turn diffs remain inspectable.
                   {...(embedded && activeThread?.lineage.compare !== true
@@ -3668,6 +3684,7 @@ export default function ChatView(props: ChatViewProps) {
                   {...(embedded ? {} : { onForkFromRun: onForkFromRunStable })}
                   {...(!embedded &&
                   isServerThread &&
+                  canOperateThread &&
                   serverConfig?.environment.capabilities.modelCompare === true &&
                   activeThread?.lineage.sideChat !== true &&
                   activeThread?.lineage.compare !== true &&
@@ -4252,6 +4269,7 @@ export default function ChatView(props: ChatViewProps) {
             if (!open) setCompareDialogRunId(null);
           }}
           environmentId={environmentId}
+          projectId={activeProject?.id ?? null}
           hostThreadId={threadId}
           sourceRunId={compareDialogRunId}
           currentModelSelection={activeThread?.modelSelection ?? null}
