@@ -649,7 +649,9 @@ export function createEnvironmentThreadDetailAtoms<E>(
       const parent = thread.lineage.parentThreadId;
       if (
         parent !== null &&
-        (thread.lineage.sideChat === true || thread.lineage.relationshipToParent === "subagent")
+        (thread.lineage.sideChat === true ||
+          thread.lineage.compare === true ||
+          thread.lineage.relationshipToParent === "subagent")
       ) {
         addChild(parent, thread);
       } else if (

@@ -173,12 +173,29 @@ export const OrchestrationV2AppThreadLineage = Schema.Struct({
   rootThreadId: ThreadId,
   sideChat: Schema.optional(Schema.Boolean),
   rewrite: Schema.optional(Schema.Literal(true)),
+  compare: Schema.optional(Schema.Literal(true)),
 });
 export type OrchestrationV2AppThreadLineage = typeof OrchestrationV2AppThreadLineage.Type;
 
-/** Subagents and side chats live inside their parent's view, never in thread lists. */
+/** Subagents, side chats, and active compare contenders live inside their parent's view, never in thread lists. */
 export const isListedThreadLineage = (lineage: OrchestrationV2AppThreadLineage): boolean =>
-  lineage.relationshipToParent !== "subagent" && lineage.sideChat !== true;
+  lineage.relationshipToParent !== "subagent" &&
+  lineage.sideChat !== true &&
+  lineage.compare !== true;
+
+export const OrchestrationV2ThreadCompare = Schema.Struct({
+  contenderThreadIds: Schema.Array(ThreadId),
+  sourceRunId: Schema.NullOr(RunId),
+  selectedWinnerThreadId: Schema.NullOr(ThreadId),
+});
+export type OrchestrationV2ThreadCompare = typeof OrchestrationV2ThreadCompare.Type;
+
+export const isActiveCompareHost = (
+  thread: { readonly compare?: OrchestrationV2ThreadCompare | null | undefined } | null | undefined,
+): boolean =>
+  thread?.compare != null &&
+  thread.compare.selectedWinnerThreadId === null &&
+  thread.compare.contenderThreadIds.length > 0;
 
 export const OrchestrationV2ContextTransferType = Schema.Literals([
   "fork",
@@ -546,6 +563,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  /** True while a newly forked compare contender awaits its initial worktree binding. */
+  pendingWorkspacePreparation: Schema.optional(Schema.Boolean),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   threadWatches: Schema.optional(
@@ -559,6 +578,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
   delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
   lineage: OrchestrationV2AppThreadLineage,
+  compare: Schema.optional(Schema.NullOr(OrchestrationV2ThreadCompare)),
   forkedFrom: Schema.NullOr(
     Schema.Union([
       Schema.Struct({ type: Schema.Literal("run"), threadId: ThreadId, runId: RunId }),
@@ -2447,6 +2467,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  /** True while a newly forked compare contender awaits its initial worktree binding. */
+  pendingWorkspacePreparation: Schema.optional(Schema.Boolean),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   threadWatches: Schema.optional(
@@ -2466,6 +2488,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   /** Issues linked to this thread; optional so pre-linking servers still decode. */
   issues: Schema.optional(Schema.Array(ThreadIssueLink)),
   lineage: OrchestrationV2AppThreadLineage,
+  compare: Schema.optional(Schema.NullOr(OrchestrationV2ThreadCompare)),
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
@@ -3379,6 +3402,10 @@ export const OrchestrationV2Command = Schema.Union([
     linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
     /** Only the server sets this, with `linkOrigin`, for a linked environment's delegated task. */
     delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
+    /** Only the server sets this when creating an unlisted compare contender under a host thread. */
+    compareParentThreadId: Schema.optional(ThreadId),
+    /** Only the server sets this when creating a compare host thread. */
+    compare: Schema.optional(Schema.NullOr(OrchestrationV2ThreadCompare)),
     importedNativeThread: Schema.optional(
       Schema.Struct({
         ref: Schema.Struct({
@@ -3839,6 +3866,29 @@ export const OrchestrationV2Command = Schema.Union([
     candidateThreadId: Schema.NullOr(ThreadId),
   }),
   Schema.Struct({
+    type: Schema.Literal("thread.compare.pick-winner"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    winnerThreadId: ThreadId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.compare.undo-pick"),
+    commandId: CommandId,
+    threadId: ThreadId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.compare.pop-out"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    contenderThreadId: ThreadId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.compare.drop"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    contenderThreadId: ThreadId,
+  }),
+  Schema.Struct({
     type: Schema.Literal("thread.fork"),
     ...OrchestrationV2CreationFields,
     commandId: CommandId,
@@ -3847,6 +3897,10 @@ export const OrchestrationV2Command = Schema.Union([
     sourcePoint: OrchestrationV2ThreadForkSourcePoint,
     title: Schema.optional(TrimmedNonEmptyString),
     sideChat: Schema.optional(Schema.Boolean),
+    compare: Schema.optional(Schema.Literal(true)),
+    modelSelection: Schema.optional(ModelSelection),
+    clearWorktree: Schema.optional(Schema.Boolean),
+    pendingWorkspacePreparation: Schema.optional(Schema.Boolean),
     createdAt: Schema.optional(Schema.DateTimeUtc),
   }),
   Schema.Struct({
@@ -4196,6 +4250,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   forceStopThread: "orchestration.forceStopThread",
   getTurnItem: "orchestration.getTurnItem",
   launchThread: "orchestration.launchThread",
+  startCompare: "orchestration.startCompare",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
   subscribeCommandOutput: "orchestration.subscribeCommandOutput",
@@ -4269,6 +4324,84 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   ),
 });
 export type OrchestrationV2ThreadLaunchInput = typeof OrchestrationV2ThreadLaunchInput.Type;
+
+export const MODEL_COMPARE_LIMITS = {
+  minContenders: 2,
+  maxContenders: 6,
+} as const;
+
+export const OrchestrationV2CompareContenderSpec = Schema.Struct({
+  modelSelection: ModelSelection,
+  /** Optional per-model prompt override when formatting differs per provider; falls back to initialMessage.text. */
+  text: Schema.optional(Schema.String),
+});
+export type OrchestrationV2CompareContenderSpec = typeof OrchestrationV2CompareContenderSpec.Type;
+
+export const OrchestrationV2CompareInitialMessage = Schema.Struct({
+  messageId: Schema.optional(MessageId),
+  text: Schema.String,
+  context: Schema.optional(OrchestrationMessageContext),
+  attachments: Schema.Array(ChatAttachment),
+});
+export type OrchestrationV2CompareInitialMessage = typeof OrchestrationV2CompareInitialMessage.Type;
+
+export const OrchestrationV2StartCompareInput = Schema.Union([
+  Schema.Struct({
+    mode: Schema.Literal("new"),
+    commandId: CommandId,
+    creationSource: Schema.optional(OrchestrationV2CreationSource),
+    hostThreadId: Schema.optional(ThreadId),
+    projectId: ProjectId,
+    title: TrimmedNonEmptyString,
+    generateTitle: Schema.optional(Schema.Boolean),
+    contenders: Schema.Array(OrchestrationV2CompareContenderSpec).check(
+      Schema.isMinLength(MODEL_COMPARE_LIMITS.minContenders),
+      Schema.isMaxLength(MODEL_COMPARE_LIMITS.maxContenders),
+    ),
+    runtimeMode: RuntimeMode,
+    interactionMode: ProviderInteractionMode,
+    workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
+    initialMessage: OrchestrationV2CompareInitialMessage,
+  }),
+  Schema.Struct({
+    mode: Schema.Literal("fork"),
+    commandId: CommandId,
+    creationSource: Schema.optional(OrchestrationV2CreationSource),
+    hostThreadId: ThreadId,
+    sourceRunId: RunId,
+    contenders: Schema.Array(OrchestrationV2CompareContenderSpec).check(
+      Schema.isMinLength(MODEL_COMPARE_LIMITS.minContenders),
+      Schema.isMaxLength(MODEL_COMPARE_LIMITS.maxContenders),
+    ),
+    workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
+    initialMessage: Schema.optional(OrchestrationV2CompareInitialMessage),
+  }),
+]);
+export type OrchestrationV2StartCompareInput = typeof OrchestrationV2StartCompareInput.Type;
+
+export const OrchestrationV2StartCompareFailure = Schema.Struct({
+  modelSelection: ModelSelection,
+  error: Schema.String,
+});
+export type OrchestrationV2StartCompareFailure = typeof OrchestrationV2StartCompareFailure.Type;
+
+export const OrchestrationV2StartCompareResult = Schema.Struct({
+  hostThreadId: ThreadId,
+  contenderThreadIds: Schema.Array(ThreadId),
+  failed: Schema.Array(OrchestrationV2StartCompareFailure),
+});
+export type OrchestrationV2StartCompareResult = typeof OrchestrationV2StartCompareResult.Type;
+
+export class OrchestrationV2StartCompareError extends Schema.TaggedError<OrchestrationV2StartCompareError>()(
+  "OrchestrationV2StartCompareError",
+  {
+    commandId: CommandId,
+    message: Schema.String,
+    /** True when validation failed or all contenders failed and any created host was deleted. */
+    rolledBack: Schema.optional(Schema.Boolean),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
 export const OrchestrationV2ThreadLaunchResult = Schema.Struct({
   threadId: ThreadId,
@@ -4917,6 +5050,10 @@ export const OrchestrationV2RpcSchemas = {
   launchThread: {
     input: OrchestrationV2ThreadLaunchInput,
     output: OrchestrationV2ThreadLaunchResult,
+  },
+  startCompare: {
+    input: OrchestrationV2StartCompareInput,
+    output: OrchestrationV2StartCompareResult,
   },
   subscribeShell: {
     input: OrchestrationV2SubscribeShellInput,

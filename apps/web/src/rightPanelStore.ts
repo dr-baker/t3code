@@ -290,7 +290,14 @@ const DEFAULT_THREAD_PANEL_VISIBILITY: ThreadPanelVisibility = {
 const singletonSurface = (
   kind: Exclude<
     RightPanelKind,
-    "file" | "preview" | "terminal" | "pull-request" | "issue" | "thread" | "linked-thread" | "rewrites"
+    | "file"
+    | "preview"
+    | "terminal"
+    | "pull-request"
+    | "issue"
+    | "thread"
+    | "linked-thread"
+    | "rewrites"
   >,
 ): RightPanelSurface => {
   switch (kind) {

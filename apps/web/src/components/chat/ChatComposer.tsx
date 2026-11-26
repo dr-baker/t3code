@@ -219,6 +219,7 @@ import {
   ComposerRestingImagePreviews,
 } from "./ComposerAttachmentStrip";
 import { CollapsedComposerStopAction, ComposerPrimaryActions } from "./ComposerPrimaryActions";
+import { CompareColumnContext, isBroadcastSubmitShortcut } from "./compareThread.logic";
 import { ComposerFooterPrimaryActions } from "./ComposerFooterControls";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
@@ -1068,6 +1069,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
 
   const backgroundThread = use(BackgroundThreadContext);
+  const compareBroadcast = use(CompareColumnContext)?.broadcast;
   const hiddenThread = use(HiddenThreadContext);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to keydown, window blur and the desktop paste-as-text event to arm plain-text paste
   useEffect(() => {
@@ -1936,7 +1938,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     disabled: dictationDisabled,
     terminalOpen,
     modelPickerOpen: isComposerModelPickerOpen,
-    ...(backgroundThread ? { targetRef: composerFormRef } : {}),
+    ...(backgroundThread || compareBroadcast !== undefined ? { targetRef: composerFormRef } : {}),
   });
 
   const resolveActiveComposerTrigger = (): {
@@ -2385,8 +2387,78 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? promptSuggestion
       : null;
 
-  const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem?: boolean) =>
-    composerCommandKeyHandler({
+  const hasBroadcastBlockedAttachments =
+    composerImages.length > 0 ||
+    composerFiles.length > 0 ||
+    composerTerminalContexts.length > 0 ||
+    composerContextRecords.size > 0;
+
+  const broadcastInFlightRef = useRef(false);
+  const submitBroadcast = () => {
+    if (
+      !compareBroadcast ||
+      compareBroadcast.count <= 1 ||
+      activeThreadId === null ||
+      isSendBusy ||
+      isEditingQueuedMessage ||
+      submissionBlocked ||
+      broadcastInFlightRef.current ||
+      environmentUnavailable !== null
+    ) {
+      return false;
+    }
+    if (
+      composerImagesRef.current.length > 0 ||
+      composerFilesRef.current.length > 0 ||
+      composerTerminalContextsRef.current.length > 0 ||
+      composerContextRecords.size > 0
+    ) {
+      toastManager.add({
+        type: "info",
+        title: gt("Broadcast sends text prompts only"),
+        description: gt("Send attachments to this model or remove them before broadcasting."),
+      });
+      return false;
+    }
+    const submittedRaw = promptRef.current;
+    const text = submittedRaw.trim();
+    if (text.length === 0) return false;
+    broadcastInFlightRef.current = true;
+    void compareBroadcast
+      .onBroadcast({ sourceThreadId: activeThreadId, text })
+      .then((ok) => {
+        if (!ok || promptRef.current !== submittedRaw) return;
+        promptRef.current = "";
+        setPrompt("");
+        setComposerDraftPrompt(composerDraftTarget, "");
+        onTypingGuardSend();
+      })
+      .finally(() => {
+        broadcastInFlightRef.current = false;
+      });
+    return true;
+  };
+  const handleBroadcastButtonClickStable = useStableCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      submitBroadcast();
+    },
+  );
+
+  const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem?: boolean) => {
+    if (
+      compareBroadcast &&
+      compareBroadcast.count > 1 &&
+      !isLiteralPendingAnswer &&
+      !isEditingQueuedMessage &&
+      !composerMenuOpen &&
+      isBroadcastSubmitShortcut(event, isMacPlatform(navigator.platform))
+    ) {
+      event.preventDefault();
+      submitBroadcast();
+      return true;
+    }
+    return composerCommandKeyHandler({
       keybindings,
       getShortcutContext,
       sendShortcut: settings.sendShortcut,
@@ -2425,6 +2497,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       promptSuggestion: offeredPromptSuggestion,
       dismissPromptSuggestion,
     })(key, event, isTaskItem);
+  };
 
   const {
     stashQueue,
@@ -3886,6 +3959,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     preserveComposerFocusOnPointerDown={isMobileViewport}
                     isEditingQueuedMessage={isEditingQueuedMessage}
                     onSubmitMessage={handleSubmitMessageStable}
+                    compareBroadcastCount={
+                      hasBroadcastBlockedAttachments ? undefined : compareBroadcast?.count
+                    }
+                    onBroadcastSubmit={
+                      compareBroadcast && !hasBroadcastBlockedAttachments
+                        ? handleBroadcastButtonClickStable
+                        : undefined
+                    }
                     onResume={onResume}
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryActionStable}

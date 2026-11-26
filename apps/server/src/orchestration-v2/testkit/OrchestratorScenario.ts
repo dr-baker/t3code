@@ -157,6 +157,10 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "thread.tag.set":
     case "thread.rewrites.start":
     case "thread.rewrites.select":
+    case "thread.compare.pick-winner":
+    case "thread.compare.undo-pick":
+    case "thread.compare.pop-out":
+    case "thread.compare.drop":
     case "thread.visit":
     case "thread.mark-unread":
     case "thread.metadata.update":

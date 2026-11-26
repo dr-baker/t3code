@@ -724,6 +724,23 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
           ? Effect.succeed(thread)
           : Effect.die(new Error(`Unexpected thread read: ${threadId}`));
       },
+      getThreadWorktreePaths: (query) => {
+        if (options.projections) return options.projections.getThreadWorktreePaths(query);
+        return Effect.succeed(
+          (options.currentThreads ?? [])
+            .filter(
+              (candidate) =>
+                candidate.deletedAt === null &&
+                (query?.includeArchived === true || candidate.archivedAt === null) &&
+                (query?.excludeSettled !== true || candidate.settledOverride !== "settled") &&
+                candidate.worktreePath !== null,
+            )
+            .map((candidate) => ({
+              threadId: candidate.id,
+              worktreePath: candidate.worktreePath!,
+            })),
+        );
+      },
     }),
     Layer.mock(Orchestrator.OrchestratorV2)({
       streamDomainEvents: Stream.fromPubSub(domainEvents).pipe(

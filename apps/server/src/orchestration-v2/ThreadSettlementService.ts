@@ -757,8 +757,7 @@ export const make = Effect.gen(function* () {
       if (thread.deletedAt !== null || thread.settledOverride !== "settled") return;
       const settledAtMs = toMillis(thread.settledAt);
       if (settledAtMs === null || settleActionRunAt.get(threadId) === settledAtMs) return;
-      // The parent's worktree belongs to the parent; shared-worktree children
-      // skip duplicate cleanup there.
+      // The parent's worktree belongs to the parent; a subagent running there does not clean it up.
       if (
         thread.lineage.relationshipToParent === "subagent" &&
         thread.lineage.parentThreadId !== null
@@ -769,6 +768,18 @@ export const make = Effect.gen(function* () {
           }),
         );
         if (parent?.worktreePath === worktreePath) return;
+      }
+      // Skip settle scripts while any other live, unsettled thread shares this checkout
+      // (compare host/siblings, promoted winner, or popped-out contender).
+      const activeWorktreeUsers = yield* projections.getThreadWorktreePaths({
+        excludeSettled: true,
+      });
+      if (
+        activeWorktreeUsers.some(
+          (entry) => entry.threadId !== threadId && entry.worktreePath === worktreePath,
+        )
+      ) {
+        return;
       }
       const run = yield* projectScripts.runForThread({
         threadId,

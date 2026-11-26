@@ -1,6 +1,7 @@
 import { msg } from "gt-react";
 import { m } from "../i18n/messages";
 import {
+  type CompareHostRollup,
   type EnvironmentThreadShell,
   type PendingSubagentRequest,
   presentThreadShell,
@@ -46,6 +47,7 @@ import { toastManager } from "./ui/toast";
 interface NotificationState extends ThreadNotificationObservation {
   readonly raw: OrchestrationV2ThreadShell;
   readonly subagentRequest: PendingSubagentRequest | null;
+  readonly compareRollup: CompareHostRollup | null;
   readonly thread: EnvironmentThreadShell;
   readonly status: SidebarThreadStatus;
 }
@@ -243,6 +245,9 @@ export function startThreadNotifications(
     const subagentRequests = registry.get(
       environmentThreadShells.pendingSubagentRequestsAtom(environmentId),
     );
+    const compareRollups = registry.get(
+      environmentThreadShells.compareHostRollupsAtom(environmentId),
+    );
     const delegatedUnderParent = registry.get(environmentThreadShells.delegatedUnderParentAtom);
     const changed: Array<[NotificationState | undefined, NotificationState]> = [];
     for (const rawThread of threads) {
@@ -257,15 +262,17 @@ export function startThreadNotifications(
       }
       const prior = previous.get(rawThread.id);
       const subagentRequest = subagentRequests.get(rawThread.id) ?? null;
+      const compareRollup = compareRollups.get(rawThread.id) ?? null;
       if (
         !entry.reconnecting &&
         prior?.raw === rawThread &&
-        prior.subagentRequest === subagentRequest
+        prior.subagentRequest === subagentRequest &&
+        prior.compareRollup === compareRollup
       ) {
         next.set(rawThread.id, prior);
         continue;
       }
-      const thread = presentThreadShell(environmentId, rawThread, subagentRequest);
+      const thread = presentThreadShell(environmentId, rawThread, subagentRequest, compareRollup);
       let status = resolveSidebarThreadStatus(thread);
       if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
       const needsAttention =
@@ -289,6 +296,7 @@ export function startThreadNotifications(
       const state = {
         raw: rawThread,
         subagentRequest,
+        compareRollup,
         thread,
         status,
         attention,
@@ -347,6 +355,10 @@ export function startThreadNotifications(
       environmentThreadShells.pendingSubagentRequestsAtom(environmentId),
       reobserve,
     );
+    const unsubscribeCompareRollups = registry.subscribe(
+      environmentThreadShells.compareHostRollupsAtom(environmentId),
+      reobserve,
+    );
     const unsubscribeDelegated = registry.subscribe(
       environmentThreadShells.delegatedUnderParentAtom,
       reobserve,
@@ -354,6 +366,7 @@ export function startThreadNotifications(
     entry.unsubscribe = () => {
       unsubscribeShell();
       unsubscribeRequests();
+      unsubscribeCompareRollups();
       unsubscribeDelegated();
       entry.gate.clear();
     };

@@ -10,14 +10,20 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import {
+  isActiveCompareHost,
   isListedThreadLineage,
   isProviderNativeSubagentThread,
   OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
 
-import type { EnvironmentThreadShell, PendingSubagentRequest } from "./models.ts";
+import type {
+  CompareHostRollup,
+  EnvironmentThreadShell,
+  PendingSubagentRequest,
+} from "./models.ts";
 import { presentThreadShell, threadRuntimeIsActive } from "./models.ts";
 import { hiddenThreadKeys, NO_HIDDEN_THREADS } from "./threadTagFilter.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
@@ -34,6 +40,7 @@ const EMPTY_THREADS: ReadonlyArray<OrchestrationV2ThreadShell> = Object.freeze([
 const EMPTY_SCOPED_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_THREAD_INDEX: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> = new Map();
 const EMPTY_SUBAGENT_REQUESTS: ReadonlyMap<ThreadId, never> = new Map<ThreadId, never>();
+const EMPTY_COMPARE_ROLLUPS: ReadonlyMap<ThreadId, CompareHostRollup> = new Map();
 const EMPTY_SIDE_CHATS_BY_PARENT: ReadonlyMap<
   ThreadId,
   ReadonlyArray<OrchestrationV2ThreadShell>
@@ -139,10 +146,14 @@ const rolledUpRequest = (
     ? "user_only_input"
     : request;
 
-/** A side chat asks its user directly, so questions roll up to the parent as well as approvals. */
+/** A side chat or compare contender asks its user directly, so questions roll up to the parent as well as approvals. */
 function sideChatRequest(thread: OrchestrationV2ThreadShell): PendingSubagentRequest | null {
   const kind = thread.pendingRuntimeRequest?.kind;
-  if (kind === undefined || kind === "auth_refresh" || thread.lineage.sideChat !== true) {
+  if (
+    kind === undefined ||
+    kind === "auth_refresh" ||
+    (thread.lineage.sideChat !== true && thread.lineage.compare !== true)
+  ) {
     return null;
   }
   return kind === "user_input" ? "user_input" : "approval";
@@ -173,14 +184,16 @@ function pendingSubagentRequestsByThread(
       if (requests.get(parentId) !== "approval") requests.set(parentId, request);
       const parent = byId.get(parentId);
       parentId =
-        parent?.lineage.relationshipToParent === "subagent" || parent?.lineage.sideChat === true
+        parent?.lineage.relationshipToParent === "subagent" ||
+        parent?.lineage.sideChat === true ||
+        parent?.lineage.compare === true
           ? parent.lineage.parentThreadId
           : null;
     }
   };
   for (const child of threads) {
     const parentId = child.lineage.parentThreadId;
-    if (child.lineage.sideChat === true) {
+    if (child.lineage.sideChat === true || child.lineage.compare === true) {
       const request = sideChatRequest(child);
       if (parentId !== null && request !== null && requests.get(parentId) !== "approval") {
         requests.set(parentId, request);
@@ -211,23 +224,151 @@ export function childThreadInputsTitle(
   const sideChats = children.filter(
     (child) => child.lineage.sideChat === true && !child.lineage.rewrite,
   ).length;
-  const kind = sideChats === children.length ? "sideChat" : sideChats === 0 ? "subagent" : "thread";
+  const compareContenders = children.filter((child) => child.lineage.compare === true).length;
+  const kind =
+    compareContenders === children.length
+      ? "compare"
+      : sideChats === children.length
+        ? "sideChat"
+        : sideChats === 0 && compareContenders === 0
+          ? "subagent"
+          : "thread";
   const count = children.length;
   if (count === 1) {
     return resolve(
       msg(
-        "{kind, select, sideChat {{need, select, input {Side chat needs input} approval {Side chat needs approval} other {Side chat needs you}}} other {{need, select, input {Subagent needs input} approval {Subagent needs approval} other {Subagent needs you}}}}",
+        "{kind, select, compare {{need, select, input {Model needs input} approval {Model needs approval} other {Model needs you}}} sideChat {{need, select, input {Side chat needs input} approval {Side chat needs approval} other {Side chat needs you}}} other {{need, select, input {Subagent needs input} approval {Subagent needs approval} other {Subagent needs you}}}}",
         { kind, need },
       ),
     );
   }
   return resolve(
     msg(
-      "{kind, select, sideChat {{need, select, input {{count} side chats need input} approval {{count} side chats need approval} other {{count} side chats need you}}} subagent {{need, select, input {{count} subagents need input} approval {{count} subagents need approval} other {{count} subagents need you}}} other {{need, select, input {{count} threads need input} approval {{count} threads need approval} other {{count} threads need you}}}}",
+      "{kind, select, compare {{need, select, input {{count} models need input} approval {{count} models need approval} other {{count} models need you}}} sideChat {{need, select, input {{count} side chats need input} approval {{count} side chats need approval} other {{count} side chats need you}}} subagent {{need, select, input {{count} subagents need input} approval {{count} subagents need approval} other {{count} subagents need you}}} other {{need, select, input {{count} threads need input} approval {{count} threads need approval} other {{count} threads need you}}}}",
       { kind, need, count: String(count) },
     ),
   );
 }
+
+const COMPARE_ACTIVE_PRIORITY = {
+  running: 4,
+  starting: 3,
+  preparing: 2,
+  waiting: 1,
+} as const;
+
+function compareHostRollupsByThread(
+  threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+  pendingSubagentRequests: ReadonlyMap<ThreadId, PendingSubagentRequest>,
+): ReadonlyMap<ThreadId, CompareHostRollup> {
+  let byId: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> | undefined;
+  let rollups: Map<ThreadId, CompareHostRollup> | undefined;
+  for (const host of threads) {
+    if (!isActiveCompareHost(host) || host.archivedAt !== null || host.deletedAt !== null) continue;
+    const contenderIds = host.compare!.contenderThreadIds;
+    byId ??= new Map(threads.map((thread) => [thread.id, thread] as const));
+    let totalCount = 0;
+    let activeCount = 0;
+    let readyCount = 0;
+    let failedCount = 0;
+    let needsAttentionCount = 0;
+    let latestCompletedAt: string | null = null;
+    let earliestActiveStartedAt: string | null = null;
+    let activeStatus: CompareHostRollup["activeStatus"] = null;
+    for (const contenderId of contenderIds) {
+      const contender = byId.get(contenderId);
+      if (!contender || contender.deletedAt !== null || contender.archivedAt !== null) continue;
+      totalCount += 1;
+      const requestKind = contender.pendingRuntimeRequest?.kind;
+      if (
+        (requestKind !== undefined && requestKind !== "auth_refresh") ||
+        pendingSubagentRequests.has(contender.id)
+      ) {
+        needsAttentionCount += 1;
+      }
+      const liveStatus =
+        contender.activityRunStatus ??
+        (contender.status === "preparing" ||
+        contender.status === "starting" ||
+        contender.status === "running" ||
+        contender.status === "waiting"
+          ? contender.status
+          : contender.status === "queued"
+            ? "starting"
+            : null);
+      if (liveStatus !== null) {
+        activeCount += 1;
+        if (
+          activeStatus === null ||
+          COMPARE_ACTIVE_PRIORITY[liveStatus] > COMPARE_ACTIVE_PRIORITY[activeStatus]
+        ) {
+          activeStatus = liveStatus;
+        }
+        const started = contender.activityRunStartedAt ?? contender.latestRunStartedAt;
+        if (started !== undefined && started !== null) {
+          const startedIso = DateTime.formatIso(started);
+          if (earliestActiveStartedAt === null || startedIso < earliestActiveStartedAt) {
+            earliestActiveStartedAt = startedIso;
+          }
+        }
+      } else if (contender.status === "failed") {
+        failedCount += 1;
+      } else if (contender.latestRunId !== null) {
+        readyCount += 1;
+      }
+      const completed = contender.latestRunCompletedAt;
+      if (completed !== undefined && completed !== null) {
+        const completedIso = DateTime.formatIso(completed);
+        if (latestCompletedAt === null || completedIso > latestCompletedAt) {
+          latestCompletedAt = completedIso;
+        }
+      }
+    }
+    if (totalCount === 0) continue;
+    rollups ??= new Map();
+    rollups.set(host.id, {
+      totalCount,
+      activeCount,
+      readyCount,
+      failedCount,
+      needsAttentionCount,
+      latestCompletedAt,
+      earliestActiveStartedAt,
+      activeStatus,
+    });
+  }
+  return rollups ?? EMPTY_COMPARE_ROLLUPS;
+}
+
+const sameCompareRollup = (
+  left: CompareHostRollup | undefined,
+  right: CompareHostRollup | undefined,
+): boolean => {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    left.totalCount === right.totalCount &&
+    left.activeCount === right.activeCount &&
+    left.readyCount === right.readyCount &&
+    left.failedCount === right.failedCount &&
+    left.needsAttentionCount === right.needsAttentionCount &&
+    left.latestCompletedAt === right.latestCompletedAt &&
+    left.earliestActiveStartedAt === right.earliestActiveStartedAt &&
+    left.activeStatus === right.activeStatus
+  );
+};
+
+const sameCompareRollups = (
+  left: ReadonlyMap<ThreadId, CompareHostRollup>,
+  right: ReadonlyMap<ThreadId, CompareHostRollup>,
+): boolean =>
+  left.size === right.size &&
+  [...right].every(([threadId, rollup]) => sameCompareRollup(left.get(threadId), rollup));
+
+const compareRollupCacheKey = (rollup: CompareHostRollup | null): string =>
+  rollup === null
+    ? ""
+    : `|c:${rollup.totalCount}:${rollup.activeCount}:${rollup.readyCount}:${rollup.failedCount}:${rollup.needsAttentionCount}:${rollup.activeStatus ?? ""}:${rollup.latestCompletedAt ?? ""}:${rollup.earliestActiveStartedAt ?? ""}`;
 
 const sameWireThreadShell = Schema.toEquivalence(OrchestrationV2ThreadShell);
 
@@ -242,6 +383,7 @@ function sameApartFromStreaming(
   if (
     previous.environmentId !== next.environmentId ||
     previous.pendingSubagentRequest !== next.pendingSubagentRequest ||
+    !sameCompareRollup(previous.compareRollup ?? undefined, next.compareRollup ?? undefined) ||
     !threadRuntimeIsActive(next.runtime)
   ) {
     return false;
@@ -279,12 +421,13 @@ export function createEnvironmentThreadShellAtoms(input: {
   // for every listed thread. Replaced source objects can be collected.
   const scopedThreads = new WeakMap<
     OrchestrationV2ThreadShell,
-    Map<string, EnvironmentThreadShell>
+    Map<string, { readonly rollupKey: string; readonly value: EnvironmentThreadShell }>
   >();
   const scopedThread = (
     environmentId: EnvironmentId,
     thread: OrchestrationV2ThreadShell,
     subagentRequests: ReadonlyMap<ThreadId, PendingSubagentRequest>,
+    compareRollups: ReadonlyMap<ThreadId, CompareHostRollup> = EMPTY_COMPARE_ROLLUPS,
   ) => {
     let byEnvironment = scopedThreads.get(thread);
     if (byEnvironment === undefined) {
@@ -292,12 +435,15 @@ export function createEnvironmentThreadShellAtoms(input: {
       scopedThreads.set(thread, byEnvironment);
     }
     const request = subagentRequests.get(thread.id) ?? null;
-    const key = request === null ? environmentId : `${environmentId}:${request}`;
-    let value = byEnvironment.get(key);
-    if (value === undefined) {
-      value = presentThreadShell(environmentId, thread, request);
-      byEnvironment.set(key, value);
+    const compareRollup = compareRollups.get(thread.id) ?? null;
+    const baseKey = `${environmentId}${request === null ? "" : `:${request}`}`;
+    const rollupKey = compareRollupCacheKey(compareRollup);
+    const cached = byEnvironment.get(baseKey);
+    if (cached !== undefined && cached.rollupKey === rollupKey) {
+      return cached.value;
     }
+    const value = presentThreadShell(environmentId, thread, request, compareRollup);
+    byEnvironment.set(baseKey, { rollupKey, value });
     return value;
   };
 
@@ -347,6 +493,19 @@ export function createEnvironmentThreadShellAtoms(input: {
       previous = next;
       return next;
     }).pipe(Atom.withLabel(`environment-local-subagent-requests:${environmentId}`));
+  });
+
+  const compareHostRollupsAtom = Atom.family((environmentId: EnvironmentId) => {
+    let previous: ReadonlyMap<ThreadId, CompareHostRollup> = EMPTY_COMPARE_ROLLUPS;
+    return Atom.make((get) => {
+      const next = compareHostRollupsByThread(
+        get(environmentThreadsAtom(environmentId)),
+        get(pendingSubagentRequestsAtom(environmentId)),
+      );
+      if (sameCompareRollups(previous, next)) return previous;
+      previous = next;
+      return next;
+    }).pipe(Atom.withLabel(`environment-compare-host-rollups:${environmentId}`));
   });
 
   // Flags for environments whose threads delegated tasks, counting what each task
@@ -484,6 +643,7 @@ export function createEnvironmentThreadShellAtoms(input: {
             ref.environmentId,
             source,
             get(pendingSubagentRequestsAtom(ref.environmentId)),
+            get(compareHostRollupsAtom(ref.environmentId)),
           );
     }).pipe(Atom.withLabel(`environment-thread-shell:${key}`));
   });
@@ -546,7 +706,9 @@ export function createEnvironmentThreadShellAtoms(input: {
           const parent = thread.lineage.parentThreadId;
           if (
             parent !== null &&
-            (thread.lineage.relationshipToParent === "subagent" || thread.lineage.sideChat === true)
+            (thread.lineage.relationshipToParent === "subagent" ||
+              thread.lineage.sideChat === true ||
+              thread.lineage.compare === true)
           ) {
             addChild({ environmentId, threadId: parent }, environmentId, thread);
           } else if (thread.delegatedFrom !== undefined) {
@@ -636,6 +798,7 @@ export function createEnvironmentThreadShellAtoms(input: {
         if (refs.length === 0) continue;
         const threads = get(environmentThreadIndexAtom(projectRef.environmentId));
         const subagentRequests = get(pendingSubagentRequestsAtom(projectRef.environmentId));
+        const compareRollups = get(compareHostRollupsAtom(projectRef.environmentId));
         for (const ref of refs) {
           const key = threadKey(ref);
           if (seen.has(key)) {
@@ -644,7 +807,7 @@ export function createEnvironmentThreadShellAtoms(input: {
           seen.add(key);
           const thread = threads.get(ref.threadId);
           if (thread !== undefined) {
-            next.push(scopedThread(ref.environmentId, thread, subagentRequests));
+            next.push(scopedThread(ref.environmentId, thread, subagentRequests, compareRollups));
           }
         }
       }
@@ -674,8 +837,9 @@ export function createEnvironmentThreadShellAtoms(input: {
     const next: EnvironmentThreadShell[] = [];
     for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       const subagentRequests = get(pendingSubagentRequestsAtom(environmentId));
+      const compareRollups = get(compareHostRollupsAtom(environmentId));
       for (const thread of get(environmentThreadsAtom(environmentId))) {
-        next.push(scopedThread(environmentId, thread, subagentRequests));
+        next.push(scopedThread(environmentId, thread, subagentRequests, compareRollups));
       }
     }
     if (arrayElementsEqual(previousThreadShells, next)) {
@@ -789,6 +953,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     const hidden = get(hiddenThreadKeysAtom);
     for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       const subagentRequests = get(pendingSubagentRequestsAtom(environmentId));
+      const compareRollups = get(compareHostRollupsAtom(environmentId));
       for (const thread of get(environmentThreadsAtom(environmentId))) {
         if (
           thread.archivedAt !== null ||
@@ -797,7 +962,7 @@ export function createEnvironmentThreadShellAtoms(input: {
         ) {
           continue;
         }
-        next.push(scopedThread(environmentId, thread, subagentRequests));
+        next.push(scopedThread(environmentId, thread, subagentRequests, compareRollups));
       }
     }
     if (arrayElementsEqual(previousNavigationShells, next)) return previousNavigationShells;
@@ -819,6 +984,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     navigationThreadShellsAtom,
     delegatedUnderParentAtom,
     pendingSubagentRequestsAtom,
+    compareHostRollupsAtom,
     threadShellsForProjectRefsAtom: (refs: ReadonlyArray<ScopedProjectRef>) =>
       threadShellsForProjectRefsAtomFamily(projectRefCollectionKey(refs)),
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),

@@ -32,6 +32,7 @@ import {
   isCompactionCommandMessage,
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
+  MODEL_COMPARE_LIMITS,
   MessageId,
   NonNegativeInt,
   type NodeId,
@@ -661,6 +662,10 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.tag.set":
     case "thread.rewrites.start":
     case "thread.rewrites.select":
+    case "thread.compare.pick-winner":
+    case "thread.compare.undo-pick":
+    case "thread.compare.pop-out":
+    case "thread.compare.drop":
     case "thread.visit":
     case "thread.mark-unread":
     case "thread.metadata.update":
@@ -1933,25 +1938,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       .findThread(threadId)
       .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
 
-  /** Side chats live inside their parent, so deleting or archiving the parent takes them too. */
+  /** Side chats and unlisted compare contenders live inside their parent, so deleting or archiving the parent takes them too. */
   const liveSideChatIds = Effect.fn("Orchestrator.liveSideChatIds")(
     function* (threadId: ThreadId) {
-      const { contextTransfers } = yield* projectionStore
-        .getThreadRecords(threadId, ["contextTransfers"])
-        .pipe(
-          Effect.catchTags({
-            ProjectionStoreThreadNotFoundError: () => Effect.succeed({ contextTransfers: [] }),
-          }),
-        );
-      const sideChatIds: Array<ThreadId> = [];
-      for (const transfer of contextTransfers) {
-        if (transfer.type !== "fork" || transfer.sourceThreadId !== threadId) continue;
-        const child = yield* projectionStore.findThread(transfer.targetThreadId);
-        if (child?.lineage.sideChat === true && child.deletedAt === null) {
-          sideChatIds.push(child.id);
+      return yield* projectionStore.getOwnedChildThreadIds(threadId);
+    },
+    (effect, threadId) =>
+      effect.pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
+  );
+
+  const liveCompareContenderIds = Effect.fn("Orchestrator.liveCompareContenderIds")(
+    function* (threadId: ThreadId) {
+      const parent = yield* projectionStore.findThread(threadId);
+      const contenderIds = parent?.compare?.contenderThreadIds ?? [];
+      const ids = new Set<ThreadId>();
+      for (const contenderId of contenderIds) {
+        const child = yield* projectionStore.findThread(contenderId);
+        if (child !== null && child.deletedAt === null) {
+          ids.add(child.id);
         }
       }
-      return sideChatIds;
+      if (parent?.compare?.selectedWinnerThreadId) {
+        const winner = yield* projectionStore.findThread(parent.compare.selectedWinnerThreadId);
+        if (winner !== null && winner.deletedAt === null) {
+          ids.add(winner.id);
+        }
+      }
+      return Array.from(ids).toSorted((left, right) => left.localeCompare(right));
     },
     (effect, threadId) =>
       effect.pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
@@ -4062,11 +4075,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(command.linkOrigin === undefined || command.delegatedFrom === undefined
         ? {}
         : { delegatedFrom: command.delegatedFrom }),
-      lineage: {
-        parentThreadId: null,
-        relationshipToParent: null,
-        rootThreadId: command.threadId,
-      },
+      lineage:
+        command.compareParentThreadId !== undefined
+          ? {
+              parentThreadId: command.compareParentThreadId,
+              relationshipToParent: "fork",
+              rootThreadId: command.compareParentThreadId,
+              compare: true,
+            }
+          : {
+              parentThreadId: null,
+              relationshipToParent: null,
+              rootThreadId: command.threadId,
+            },
+      ...(command.compare === undefined ? {} : { compare: command.compare }),
       forkedFrom: null,
       createdAt: now,
       updatedAt: now,
@@ -4086,6 +4108,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: thread,
     });
+    if (command.compareParentThreadId !== undefined) {
+      yield* attachCompareContender({
+        command,
+        hostThreadId: command.compareParentThreadId,
+        contenderThreadId: command.threadId,
+        contenderProjectId: command.projectId,
+        sourceRunId: null,
+        events,
+        now,
+      });
+    }
     if (command.importedNativeThread !== undefined) {
       yield* emitEvent({
         type: "provider-thread.updated",
@@ -5132,7 +5165,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
           ),
         );
-      const latestRunCompletedAt = shell?.latestRunCompletedAt ?? null;
+      let latestRunCompletedAt = shell?.latestRunCompletedAt ?? null;
+      if (
+        thread.deletedAt === null &&
+        thread.archivedAt === null &&
+        thread.compare != null &&
+        thread.compare.contenderThreadIds.length > 0 &&
+        thread.compare.selectedWinnerThreadId === null
+      ) {
+        for (const contenderId of thread.compare.contenderThreadIds) {
+          const contenderShell = yield* projectionStore
+            .getThreadShell(contenderId)
+            .pipe(
+              Effect.mapError(
+                (cause) => new OrchestratorProjectionError({ threadId: contenderId, cause }),
+              ),
+            );
+          const completedAt = contenderShell?.latestRunCompletedAt ?? null;
+          if (
+            completedAt !== null &&
+            (latestRunCompletedAt === null ||
+              DateTime.toEpochMillis(completedAt) > DateTime.toEpochMillis(latestRunCompletedAt))
+          ) {
+            latestRunCompletedAt = completedAt;
+          }
+        }
+      }
       if (latestRunCompletedAt === null) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -5307,8 +5365,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     snooze: command.limitRecovery.snooze ?? previousRecovery?.snooze ?? false,
                     requestId: command.commandId,
                   };
+          const {
+            pendingWorkspacePreparation: _pendingWorkspacePreparation,
+            ...threadWithoutPendingWorkspace
+          } = thread;
+          const baseThread =
+            command.worktreePath !== undefined ? threadWithoutPendingWorkspace : thread;
           return {
-            ...thread,
+            ...baseThread,
             ...(command.title === undefined ? {} : { title: command.title, titleRenamed: true }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
             ...(command.limitRecovery !== undefined &&
@@ -6364,6 +6428,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.title === undefined ? {} : { title: command.title }),
         ...(command.sideChat ? { sideChat: true } : {}),
         ...(rewrite ? { rewrite } : {}),
+        ...(command.compare ? { compare: true } : {}),
+        ...(command.modelSelection === undefined ? {} : { modelSelection: command.modelSelection }),
+        ...(command.clearWorktree ? { clearWorktree: true } : {}),
+        ...(command.pendingWorkspacePreparation ? { pendingWorkspacePreparation: true } : {}),
         createdBy: command.createdBy,
         creationSource: command.creationSource,
         createdAt: now,
@@ -6384,6 +6452,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: transfer,
     });
+    if (command.compare === true) {
+      yield* attachCompareContender({
+        command,
+        hostThreadId: command.sourceThreadId,
+        contenderThreadId: command.targetThreadId,
+        contenderProjectId: sourceProjection.thread.projectId,
+        sourceRunId: sourceRun?.id ?? null,
+        events,
+        now,
+      });
+    }
   });
 
   const dispatchThreadMergeBack = Effect.fn("orchestrationV2.dispatch.threadMergeBack")(function* (
@@ -6748,6 +6827,535 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: { ...run, rewrites },
     });
+  });
+
+  const withoutCompareLineage = (
+    lineage: OrchestrationV2AppThread["lineage"],
+  ): OrchestrationV2AppThread["lineage"] => {
+    const { compare: _compare, ...rest } = lineage;
+    return rest;
+  };
+
+  const reconcileDeletedCompareContender = Effect.fn(
+    "Orchestrator.reconcileDeletedCompareContender",
+  )(function* (
+    command: Extract<OrchestrationV2Command, { type: "thread.delete" }>,
+    child: OrchestrationV2AppThread,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    now: DateTime.Utc,
+  ) {
+    if (child.lineage.parentThreadId === null) return;
+    const host = yield* findThread(child.lineage.parentThreadId);
+    if (!host || host.deletedAt !== null || !host.compare) return;
+    if (
+      !host.compare.contenderThreadIds.includes(child.id) &&
+      host.compare.selectedWinnerThreadId !== child.id
+    ) {
+      return;
+    }
+    const remaining = host.compare.contenderThreadIds.filter((id) => id !== child.id);
+    const nextSelectedWinner =
+      host.compare.selectedWinnerThreadId === child.id ? null : host.compare.selectedWinnerThreadId;
+    const nextCompare =
+      remaining.length === 0 && nextSelectedWinner === null
+        ? null
+        : {
+            ...host.compare,
+            contenderThreadIds: remaining,
+            selectedWinnerThreadId: nextSelectedWinner,
+          };
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.metadata-updated",
+      threadId: host.id,
+      occurredAt: now,
+      payload: { ...host, compare: nextCompare, updatedAt: now },
+    });
+  });
+
+  const attachCompareContender = Effect.fnUntraced(function* (input: {
+    readonly command: OrchestrationV2Command;
+    readonly hostThreadId: ThreadId;
+    readonly contenderThreadId: ThreadId;
+    readonly contenderProjectId: ProjectId;
+    readonly sourceRunId: RunId | null;
+    readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
+    readonly now: DateTime.Utc;
+  }) {
+    const reject = (cause: string) =>
+      new OrchestratorDispatchError({
+        commandId: input.command.commandId,
+        commandType: input.command.type,
+        cause,
+      });
+    if (input.contenderThreadId === input.hostThreadId) {
+      return yield* reject("A compare host cannot attach itself as a contender.");
+    }
+    const host = yield* findThread(input.hostThreadId);
+    if (!host || host.deletedAt !== null || host.archivedAt !== null) {
+      return yield* reject("Compare requires an active host thread.");
+    }
+    if (
+      host.projectId !== input.contenderProjectId ||
+      host.lineage.sideChat === true ||
+      host.lineage.compare === true ||
+      host.lineage.relationshipToParent === "subagent" ||
+      host.delegatedFrom !== undefined
+    ) {
+      return yield* reject(
+        "Compare operations require a top-level host thread in the same project.",
+      );
+    }
+    if (host.compare?.selectedWinnerThreadId != null) {
+      return yield* reject("A winner has already been picked for this comparison.");
+    }
+    if (
+      host.compare?.sourceRunId != null &&
+      input.sourceRunId !== null &&
+      host.compare.sourceRunId !== input.sourceRunId
+    ) {
+      return yield* reject("This thread already has an active comparison from another turn.");
+    }
+    const existing = host.compare?.contenderThreadIds ?? [];
+    if (existing.length === 0 && input.sourceRunId !== null) {
+      const hostRecords = yield* projectionStore
+        .getThreadRecords(input.hostThreadId, ["runs", "runtimeRequests"])
+        .pipe(mapDispatchError(input.command));
+      if (
+        hostRecords.runs.some(
+          (run) =>
+            run.status === "preparing" ||
+            run.status === "queued" ||
+            run.status === "starting" ||
+            run.status === "running" ||
+            run.status === "waiting",
+        )
+      ) {
+        return yield* reject(
+          "Wait for active or queued runs on this thread to finish before starting a comparison.",
+        );
+      }
+      if (hostRecords.runtimeRequests.some((request) => request.status === "pending")) {
+        return yield* reject(
+          "Resolve pending approvals or questions on this thread before starting a comparison.",
+        );
+      }
+    }
+    const merged = existing.includes(input.contenderThreadId)
+      ? existing
+      : [...existing, input.contenderThreadId];
+    if (merged.length > MODEL_COMPARE_LIMITS.maxContenders) {
+      return yield* reject(
+        `A comparison can have at most ${MODEL_COMPARE_LIMITS.maxContenders} models.`,
+      );
+    }
+    yield* emit(
+      input.events,
+      input.command,
+    )({
+      type: "thread.metadata-updated",
+      threadId: host.id,
+      providerInstanceId: host.providerInstanceId,
+      occurredAt: input.now,
+      payload: {
+        ...host,
+        compare: {
+          contenderThreadIds: merged,
+          sourceRunId: host.compare?.sourceRunId ?? input.sourceRunId,
+          selectedWinnerThreadId: null,
+        },
+        updatedAt: input.now,
+      },
+    });
+  });
+
+  const dispatchThreadCompare = Effect.fn("Orchestrator.dispatchThreadCompare")(function* (
+    command: Extract<
+      OrchestrationV2Command,
+      {
+        type:
+          | "thread.compare.pick-winner"
+          | "thread.compare.undo-pick"
+          | "thread.compare.pop-out"
+          | "thread.compare.drop";
+      }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    const reject = (cause: string) =>
+      new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause,
+      });
+    const host = yield* findThread(command.threadId);
+    if (!host || host.deletedAt !== null) {
+      return yield* reject(`Thread ${command.threadId} does not exist.`);
+    }
+    if (
+      host.lineage.sideChat === true ||
+      host.lineage.compare === true ||
+      host.lineage.relationshipToParent === "subagent" ||
+      host.delegatedFrom !== undefined
+    ) {
+      return yield* reject("Compare operations require a top-level host thread.");
+    }
+    const now = yield* DateTime.now;
+    const emitEvent = emit(events, command);
+
+    const latestPendingThreadState = Effect.fnUntraced(function* (
+      fallback: OrchestrationV2AppThread,
+    ) {
+      const pending = yield* Ref.get(events);
+      for (let i = pending.length - 1; i >= 0; i -= 1) {
+        const event = pending[i];
+        if (
+          event &&
+          event.threadId === fallback.id &&
+          (event.type === "thread.archived" ||
+            event.type === "thread.unarchived" ||
+            event.type === "thread.settled" ||
+            event.type === "thread.unsettled" ||
+            event.type === "thread.metadata-updated")
+        ) {
+          return event.payload;
+        }
+      }
+      return fallback;
+    });
+
+    const settledArchivedPayload = (
+      thread: OrchestrationV2AppThread,
+      extra?: Partial<OrchestrationV2AppThread>,
+    ): OrchestrationV2AppThread => ({
+      ...thread,
+      ...extra,
+      archivedAt: extra?.archivedAt !== undefined ? extra.archivedAt : (thread.archivedAt ?? now),
+      settledOverride: "settled",
+      settledAt: now,
+      unsettledAt: null,
+      pinnedAt: null,
+      pinOrderKey: null,
+      activeOrderKey: null,
+      snoozedUntil: null,
+      snoozedAt: null,
+      limitRecovery: thread.limitRecovery
+        ? { ...thread.limitRecovery, autoResume: false, snooze: false }
+        : thread.limitRecovery,
+      pullRequests: thread.pullRequests?.map((link) => withPullRequestWatch(link, undefined)),
+      updatedAt: now,
+    });
+
+    const archiveAndSettle = Effect.fnUntraced(function* (
+      target: OrchestrationV2AppThread,
+      suffix: string,
+      extra?: Partial<OrchestrationV2AppThread>,
+    ) {
+      const wasUnarchived = target.archivedAt === null;
+      if (wasUnarchived) {
+        yield* dispatchThreadMutation(
+          {
+            type: "thread.archive",
+            commandId: CommandId.make(`${command.commandId}:${suffix}:archive`),
+            threadId: target.id,
+          },
+          events,
+          effects,
+        );
+      }
+      const postArchive = yield* latestPendingThreadState(target);
+      yield* emitEvent({
+        type: "thread.settled",
+        threadId: target.id,
+        providerInstanceId: postArchive.providerInstanceId,
+        occurredAt: now,
+        // Stamp the shared command timestamp when newly archived so Undo matches losers to host.
+        payload: settledArchivedPayload(postArchive, {
+          ...extra,
+          ...(wasUnarchived ? { archivedAt: now } : {}),
+        }),
+      });
+    });
+
+    const assertNoRunningDelegatedTasks = Effect.fnUntraced(function* (
+      target: OrchestrationV2AppThread,
+      message: string,
+    ) {
+      if (target.archivedAt !== null) return;
+      const { subagents } = yield* projectionStore
+        .getThreadRecords(target.id, ["subagents"])
+        .pipe(mapDispatchError(command));
+      if (hasRunningDelegatedTasks(subagents)) return yield* reject(message);
+    });
+
+    const finalizeHostAfterContenderRemoval = Effect.fnUntraced(function* (
+      remaining: ReadonlyArray<ThreadId>,
+    ) {
+      const currentCompare = host.compare!;
+      if (remaining.length > 0) {
+        yield* emitEvent({
+          type: "thread.metadata-updated",
+          threadId: host.id,
+          providerInstanceId: host.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...host,
+            compare: { ...currentCompare, contenderThreadIds: [...remaining] },
+            updatedAt: now,
+          },
+        });
+        return;
+      }
+      const { runs } = yield* projectionStore
+        .getThreadRecords(host.id, ["runs"])
+        .pipe(mapDispatchError(command));
+      if (runs.length === 0) {
+        yield* archiveAndSettle(host, "host", {
+          compare: { ...currentCompare, contenderThreadIds: [] },
+        });
+      } else {
+        yield* emitEvent({
+          type: "thread.metadata-updated",
+          threadId: host.id,
+          providerInstanceId: host.providerInstanceId,
+          occurredAt: now,
+          payload: { ...host, compare: null, updatedAt: now },
+        });
+      }
+    });
+
+    switch (command.type) {
+      case "thread.compare.pick-winner": {
+        const compare = host.compare;
+        if (
+          !compare ||
+          compare.contenderThreadIds.length === 0 ||
+          host.archivedAt !== null ||
+          compare.selectedWinnerThreadId !== null ||
+          !compare.contenderThreadIds.includes(command.winnerThreadId)
+        ) {
+          return yield* reject("This thread has no active model comparison for that contender.");
+        }
+        const winner = yield* findThread(command.winnerThreadId);
+        if (!winner || winner.deletedAt !== null) {
+          return yield* reject("The selected contender was deleted.");
+        }
+        const losers: Array<OrchestrationV2AppThread> = [];
+        for (const contenderId of compare.contenderThreadIds) {
+          if (contenderId === winner.id) continue;
+          const loser = yield* findThread(contenderId);
+          if (!loser || loser.deletedAt !== null) continue;
+          yield* assertNoRunningDelegatedTasks(
+            loser,
+            "Stop or finish running delegated tasks on other models before picking a winner.",
+          );
+          losers.push(loser);
+        }
+        yield* emitEvent({
+          type: "thread.metadata-updated",
+          threadId: winner.id,
+          providerInstanceId: winner.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...winner,
+            title: winner.titleRenamed === true ? winner.title : host.title,
+            lineage: withoutCompareLineage(winner.lineage),
+            archivedAt: null,
+            settledOverride: "active",
+            settledAt: null,
+            unsettledAt: now,
+            ...(host.pinnedAt !== undefined ? { pinnedAt: host.pinnedAt } : {}),
+            ...(host.pinOrderKey !== undefined ? { pinOrderKey: host.pinOrderKey } : {}),
+            ...(host.activeOrderKey !== undefined ? { activeOrderKey: host.activeOrderKey } : {}),
+            ...(host.tags !== undefined && host.tags.length > 0 ? { tags: host.tags } : {}),
+            updatedAt: now,
+          },
+        });
+        for (const loser of losers) {
+          yield* archiveAndSettle(loser, `loser:${loser.id}`);
+        }
+        const hostSideChatIds = yield* liveSideChatIds(host.id);
+        for (const sideChatId of hostSideChatIds) {
+          if (compare.contenderThreadIds.includes(sideChatId)) continue;
+          const sideChat = yield* findThread(sideChatId);
+          if (
+            !sideChat ||
+            sideChat.deletedAt !== null ||
+            sideChat.archivedAt !== null ||
+            sideChat.lineage.sideChat !== true
+          ) {
+            continue;
+          }
+          yield* dispatchThreadMutation(
+            {
+              type: "thread.archive",
+              commandId: CommandId.make(`${command.commandId}:sidechat:${sideChat.id}:archive`),
+              threadId: sideChat.id,
+            },
+            events,
+            effects,
+          );
+        }
+        yield* archiveAndSettle(host, "host", {
+          compare: { ...compare, selectedWinnerThreadId: winner.id },
+        });
+        return;
+      }
+      case "thread.compare.undo-pick": {
+        const compare = host.compare;
+        if (
+          !compare ||
+          compare.selectedWinnerThreadId === null ||
+          !compare.contenderThreadIds.includes(compare.selectedWinnerThreadId)
+        ) {
+          return yield* reject("This comparison has no selected winner to undo.");
+        }
+        const winner = yield* findThread(compare.selectedWinnerThreadId);
+        if (
+          !winner ||
+          winner.deletedAt !== null ||
+          winner.lineage.parentThreadId !== host.id ||
+          winner.lineage.compare === true ||
+          (winner.compare != null && winner.compare.contenderThreadIds.length > 0)
+        ) {
+          return yield* reject("The promoted winner cannot be restored into this comparison.");
+        }
+        const hostArchivedAt = host.archivedAt;
+        yield* emitEvent({
+          type: "thread.metadata-updated",
+          threadId: winner.id,
+          providerInstanceId: winner.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...winner,
+            lineage: { ...winner.lineage, compare: true },
+            pinnedAt: null,
+            pinOrderKey: null,
+            activeOrderKey: null,
+            updatedAt: now,
+          },
+        });
+        yield* emitEvent({
+          type: "thread.unarchived",
+          threadId: host.id,
+          providerInstanceId: host.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...host,
+            compare: { ...compare, selectedWinnerThreadId: null },
+            archivedAt: null,
+            settledOverride: "active",
+            settledAt: null,
+            unsettledAt: now,
+            ...(winner.pinnedAt !== undefined ? { pinnedAt: winner.pinnedAt } : {}),
+            ...(winner.pinOrderKey !== undefined ? { pinOrderKey: winner.pinOrderKey } : {}),
+            ...(winner.activeOrderKey !== undefined
+              ? { activeOrderKey: winner.activeOrderKey }
+              : {}),
+            updatedAt: now,
+          },
+        });
+        for (const contenderId of compare.contenderThreadIds) {
+          if (contenderId === winner.id) continue;
+          const loser = yield* findThread(contenderId);
+          if (
+            !loser ||
+            loser.deletedAt !== null ||
+            loser.archivedAt === null ||
+            hostArchivedAt === null ||
+            DateTime.toEpochMillis(loser.archivedAt) < DateTime.toEpochMillis(hostArchivedAt)
+          ) {
+            continue;
+          }
+          yield* emitEvent({
+            type: "thread.unarchived",
+            threadId: loser.id,
+            providerInstanceId: loser.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              ...loser,
+              archivedAt: null,
+              settledOverride: "active",
+              settledAt: null,
+              unsettledAt: now,
+              updatedAt: now,
+            },
+          });
+        }
+        const hostSideChatIds = yield* liveSideChatIds(host.id);
+        for (const sideChatId of hostSideChatIds) {
+          if (compare.contenderThreadIds.includes(sideChatId)) continue;
+          const sideChat = yield* findThread(sideChatId);
+          if (
+            !sideChat ||
+            sideChat.deletedAt !== null ||
+            sideChat.lineage.sideChat !== true ||
+            sideChat.archivedAt === null ||
+            hostArchivedAt === null ||
+            DateTime.toEpochMillis(sideChat.archivedAt) < DateTime.toEpochMillis(hostArchivedAt)
+          ) {
+            continue;
+          }
+          yield* dispatchThreadMutation(
+            {
+              type: "thread.unarchive",
+              commandId: CommandId.make(`${command.commandId}:sidechat:${sideChat.id}:unarchive`),
+              threadId: sideChat.id,
+            },
+            events,
+            effects,
+          );
+        }
+        return;
+      }
+      case "thread.compare.pop-out":
+      case "thread.compare.drop": {
+        const compare = host.compare;
+        if (
+          !compare ||
+          host.archivedAt !== null ||
+          compare.selectedWinnerThreadId !== null ||
+          !compare.contenderThreadIds.includes(command.contenderThreadId)
+        ) {
+          return yield* reject("The contender does not belong to an active comparison.");
+        }
+        const contender = yield* findThread(command.contenderThreadId);
+        if (command.type === "thread.compare.pop-out") {
+          if (!contender || contender.deletedAt !== null) {
+            return yield* reject("The contender was deleted.");
+          }
+          yield* emitEvent({
+            type: "thread.metadata-updated",
+            threadId: contender.id,
+            providerInstanceId: contender.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              ...contender,
+              lineage: withoutCompareLineage(contender.lineage),
+              archivedAt: null,
+              settledOverride: "active",
+              settledAt: null,
+              unsettledAt: now,
+              updatedAt: now,
+            },
+          });
+        } else if (contender && contender.deletedAt === null) {
+          yield* assertNoRunningDelegatedTasks(
+            contender,
+            "Stop or finish this model's running delegated tasks before removing it from comparison.",
+          );
+          yield* archiveAndSettle(contender, `drop:${contender.id}`);
+        }
+        const remaining = compare.contenderThreadIds.filter(
+          (id) => id !== command.contenderThreadId,
+        );
+        yield* finalizeHostAfterContenderRemoval(remaining);
+        return;
+      }
+    }
   });
 
   const ensureSteeringMessage = Effect.fn("Orchestrator.ensureSteeringMessage")(function* (
@@ -7641,6 +8249,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         : undefined,
     );
+    if (
+      projection.thread.pendingWorkspacePreparation === true &&
+      command.dispatchMode.type !== "defer_start"
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Worktree setup is still preparing for this model. Try again in a moment.",
+      });
+    }
     if (command.steerFollowUpOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);
       if (
@@ -9847,29 +10465,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   }),
               ),
             );
-    const checkpointScope = yield* checkpointService
-      .prepareRootRunScope({
-        threadId: command.threadId,
-        runId,
-        rootNodeId,
-        providerThreadId: providerThread.id,
-        cwd:
-          resolvedRuntimePolicy.cwd ??
-          existingProviderSession?.cwd ??
-          projection.thread.worktreePath ??
-          process.cwd(),
-        createdAt: now,
-      })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new OrchestratorDispatchError({
-              commandId: command.commandId,
-              commandType: command.type,
-              cause,
-            }),
-        ),
-      );
+    const deferStart = dispatchMode.type === "defer_start";
+    const checkpointScope = deferStart
+      ? null
+      : yield* checkpointService
+          .prepareRootRunScope({
+            threadId: command.threadId,
+            runId,
+            rootNodeId,
+            providerThreadId: providerThread.id,
+            cwd:
+              resolvedRuntimePolicy.cwd ??
+              existingProviderSession?.cwd ??
+              projection.thread.worktreePath ??
+              process.cwd(),
+            createdAt: now,
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestratorDispatchError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  cause,
+                }),
+            ),
+          );
     const run: OrchestrationV2Run = {
       id: runId,
       threadId: command.threadId,
@@ -9880,7 +10501,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       userMessageId: command.messageId,
       rootNodeId,
       activeAttemptId: attemptId,
-      status: "starting",
+      status: deferStart ? "preparing" : "starting",
       queuePosition: null,
       requestedAt: now,
       startedAt: null,
@@ -9902,6 +10523,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(command.usageLimitContinuationOfRunId === undefined
         ? {}
         : { usageLimitContinuationOfRunId: command.usageLimitContinuationOfRunId }),
+      ...(dispatchMode.type === "defer_start" && dispatchMode.workspaceStrategy !== undefined
+        ? { workspacePreparation: dispatchMode.workspaceStrategy }
+        : {}),
       ...(continuedTaskId === undefined ? {} : { delegatedTaskId: continuedTaskId }),
       ...wakeWorkStartedAt(projection, command),
       ...output,
@@ -9932,7 +10556,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       providerTurnId: null,
       nativeItemRef: null,
       runtimeRequestId: null,
-      checkpointScopeId: checkpointScope.id,
+      checkpointScopeId: checkpointScope?.id ?? null,
       startedAt: null,
       completedAt: null,
     };
@@ -10278,15 +10902,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: rootNode,
     });
-    yield* emitEvent({
-      type: "checkpoint-scope.created",
-      threadId: command.threadId,
-      runId,
-      nodeId: rootNodeId,
-      providerInstanceId: modelSelection.instanceId,
-      occurredAt: now,
-      payload: checkpointScope,
-    });
+    if (checkpointScope !== null) {
+      yield* emitEvent({
+        type: "checkpoint-scope.created",
+        threadId: command.threadId,
+        runId,
+        nodeId: rootNodeId,
+        providerInstanceId: modelSelection.instanceId,
+        occurredAt: now,
+        payload: checkpointScope,
+      });
+    }
     if (handoffTurnItem !== null) {
       yield* emitEvent({
         type: "turn-item.updated",
@@ -10371,13 +10997,46 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         } satisfies PendingOrchestrationEffectV2,
       ]);
     }
+    if (deferStart) {
+      yield* emitEvent({
+        type: "turn-item.updated",
+        threadId: command.threadId,
+        runId,
+        nodeId: rootNodeId,
+        providerInstanceId: modelSelection.instanceId,
+        occurredAt: now,
+        payload: {
+          id: idAllocator.derive.turnItemFromProviderItem({
+            driver: adapter.driver,
+            nativeItemId: `workspace-preparation:${runId}`,
+          }),
+          threadId: command.threadId,
+          runId,
+          nodeId: rootNodeId,
+          providerThreadId: providerThread.id,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: turnItem.ordinal + 1,
+          status: "running",
+          title: WORKSPACE_PREPARATION_INPUT,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          type: "command_execution",
+          input: WORKSPACE_PREPARATION_INPUT,
+        },
+      });
+    }
     const pendingEffect = {
       id: `effect:${command.commandId}:provider-turn.start:${runId}`,
       commandId: command.commandId,
       threadId: command.threadId,
       request: { type: "provider-turn.start", runId },
     } satisfies PendingOrchestrationEffectV2;
-    yield* Ref.update(effects, (existing) => [...existing, pendingEffect]);
+    if (!deferStart) {
+      yield* Ref.update(effects, (existing) => [...existing, pendingEffect]);
+    }
   });
 
   // A native background subagent keeps working, and delegating, after the latest run settles.
@@ -16248,6 +16907,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       case "thread.delete": {
         const now = yield* DateTime.now;
+        const deleteThreadIds = [command.threadId, ...sideChatIds];
+        const claimedAttachmentIds = new Set<string>();
         const planDeletion = Effect.fn("Orchestrator.planDeletion")(function* (
           deletion: typeof command,
         ) {
@@ -16267,14 +16928,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             );
           if (deletion.threadId === command.threadId) {
             yield* reconcileDeletedRewrite(command, projection.thread, events, now);
+            yield* reconcileDeletedCompareContender(command, projection.thread, events, now);
           }
+          const rawAttachmentIds = yield* projectionStore
+            .getThreadAttachmentIds(deletion.threadId, { excludeThreadIds: deleteThreadIds })
+            .pipe(mapDispatchError(command));
+          const attachmentIds = rawAttachmentIds.filter((id) => {
+            if (claimedAttachmentIds.has(id)) return false;
+            claimedAttachmentIds.add(id);
+            return true;
+          });
           return yield* mapDispatchError(command)(
             planThreadDeletion({
               command: deletion,
               projection,
-              attachmentIds: yield* projectionStore
-                .getThreadAttachmentIds(deletion.threadId)
-                .pipe(mapDispatchError(command)),
+              attachmentIds,
               now,
               idAllocator,
             }),
@@ -16344,7 +17012,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       }
       case "thread.settle":
-      case "thread.unsettle":
+      case "thread.unsettle": {
+        const parentSettledAt = (yield* findThread(command.threadId))?.settledAt ?? null;
+        yield* dispatchThreadMutation(command, events, effects);
+        for (const threadId of sideChatIds) {
+          const child = yield* findThread(threadId);
+          if (
+            child?.lineage.compare !== true ||
+            child.deletedAt !== null ||
+            child.archivedAt !== null
+          ) {
+            continue;
+          }
+          const follows =
+            command.type === "thread.settle"
+              ? child.settledOverride !== "settled"
+              : child.settledOverride === "settled" &&
+                child.settledAt !== null &&
+                parentSettledAt !== null &&
+                DateTime.toEpochMillis(child.settledAt) >= DateTime.toEpochMillis(parentSettledAt);
+          if (!follows) continue;
+          yield* dispatchThreadMutation(
+            {
+              ...command,
+              commandId: CommandId.make(`${command.commandId}:compare:${threadId}`),
+              threadId,
+            },
+            events,
+            effects,
+          );
+        }
+        break;
+      }
       case "thread.snooze":
       case "thread.unsnooze":
       case "thread.auto-settle.set":
@@ -16601,6 +17300,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.rewrites.start":
       case "thread.rewrites.select":
         yield* dispatchRewrites(command, events, effects);
+        break;
+      case "thread.compare.pick-winner":
+      case "thread.compare.undo-pick":
+      case "thread.compare.pop-out":
+      case "thread.compare.drop":
+        yield* dispatchThreadCompare(command, events, effects);
         break;
       case "thread.fork":
         yield* dispatchThreadFork(command, events);
@@ -17023,6 +17728,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       commandThreadId(command),
       dispatchWithReceiptEffect(command),
     );
+    if (
+      command.type === "thread.create" &&
+      command.compareParentThreadId !== undefined &&
+      command.compareParentThreadId !== command.threadId
+    ) {
+      return yield* threadDispatch.withLock(command.compareParentThreadId, dispatch);
+    }
     // A fork holds its source's lock, so a source deletion and its fork never interleave. A
     // parent's lock comes before its side chats' locks. A side chat fork from a side chat or a
     // fork onto an existing thread would invert that order; dispatch rejects both, so they skip it.
@@ -17037,7 +17749,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ? dispatch
         : threadDispatch.withLock(command.sourceThreadId, dispatch);
     }
-    if (command.type === "thread.archive" || command.type === "thread.unarchive") {
+    if (
+      command.type === "thread.archive" ||
+      command.type === "thread.unarchive" ||
+      command.type === "thread.settle" ||
+      command.type === "thread.unsettle"
+    ) {
       return yield* threadDispatch.withLock(
         command.threadId,
         liveSideChatIds(command.threadId).pipe(
@@ -17045,6 +17762,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             sideChatIds.reduce(
               (locked, sideChatId) => threadDispatch.withLock(sideChatId, locked),
               dispatchWithReceiptEffect(command, sideChatIds),
+            ),
+          ),
+        ),
+      );
+    }
+    if (
+      command.type === "thread.compare.pick-winner" ||
+      command.type === "thread.compare.undo-pick" ||
+      command.type === "thread.compare.pop-out" ||
+      command.type === "thread.compare.drop"
+    ) {
+      return yield* threadDispatch.withLock(
+        command.threadId,
+        Effect.all([
+          liveCompareContenderIds(command.threadId),
+          command.type === "thread.compare.pick-winner" ||
+          command.type === "thread.compare.undo-pick"
+            ? liveSideChatIds(command.threadId)
+            : Effect.succeed([] as ReadonlyArray<ThreadId>),
+        ]).pipe(
+          Effect.flatMap(([contenderIds, sideChatIds]) =>
+            Array.from(new Set([...contenderIds, ...sideChatIds])).reduce(
+              (locked, childId) => threadDispatch.withLock(childId, locked),
+              dispatchWithReceiptEffect(command),
             ),
           ),
         ),
@@ -17061,6 +17802,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ),
             );
           const source = rewriteSourceRun(thread);
+          const compareHostId =
+            thread.lineage.compare === true
+              ? thread.lineage.parentThreadId
+              : thread.lineage.parentThreadId !== null &&
+                  (yield* findThread(thread.lineage.parentThreadId))?.compare
+                    ?.selectedWinnerThreadId === thread.id
+                ? thread.lineage.parentThreadId
+                : null;
           const deletion = threadDispatch.withLock(
             command.threadId,
             liveSideChatIds(command.threadId).pipe(
@@ -17072,8 +17821,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ),
             ),
           );
-          // Serialize deletion with the parent's rewrite selection and consumption.
-          return yield* source ? threadDispatch.withLock(source.threadId, deletion) : deletion;
+          const parentLockId = source?.threadId ?? compareHostId;
+          // Serialize deletion with the parent's rewrite or compare state.
+          return yield* parentLockId ? threadDispatch.withLock(parentLockId, deletion) : deletion;
         }),
       );
     }

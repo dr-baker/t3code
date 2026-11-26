@@ -84,6 +84,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
   // Force stop kills agent processes, as Stop on a terminal does.
   [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: AuthOrchestrationOperateScope,
+  [ORCHESTRATION_V2_WS_METHODS.startCompare]: AuthOrchestrationOperateScope,
   // A guest link hands thread access to someone outside, like a pairing link.
   [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
   [WS_METHODS.peerLinksLink]: AuthAccessWriteScope,
@@ -107,7 +108,12 @@ export function clientRpcRequiredScopes(
     typeof input === "object" &&
     input !== null &&
     "type" in input &&
-    (input.type === "thread.rewrites.start" || input.type === "thread.rewrites.select")
+    (input.type === "thread.rewrites.start" ||
+      input.type === "thread.rewrites.select" ||
+      input.type === "thread.compare.pick-winner" ||
+      input.type === "thread.compare.undo-pick" ||
+      input.type === "thread.compare.pop-out" ||
+      input.type === "thread.compare.drop")
   ) {
     return [AuthOrchestrationOperateScope];
   }

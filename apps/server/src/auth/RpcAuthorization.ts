@@ -25,6 +25,7 @@ import {
   AuthTerminalOperateScope,
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationV2Command,
+  type OrchestrationV2StartCompareInput,
   type OrchestrationV2ThreadLaunchInput,
   AuthTerminalReadScope,
   type AuthEnvironmentScope,
@@ -62,6 +63,7 @@ export const RPC_REQUIRED_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.launchThread]: AuthOrchestrationOperateScope,
+  [ORCHESTRATION_V2_WS_METHODS.startCompare]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput]: AuthOrchestrationReadScope,
@@ -288,6 +290,20 @@ const sendsProviderSignOutPrompt = (method: string, payload: unknown): boolean =
   if (method === ORCHESTRATION_V2_WS_METHODS.launchThread) {
     const message = (payload as OrchestrationV2ThreadLaunchInput).initialMessage;
     return message !== undefined && isProviderSignOutPrompt(message);
+  }
+  if (method === ORCHESTRATION_V2_WS_METHODS.startCompare) {
+    const compare = payload as OrchestrationV2StartCompareInput;
+    if (
+      compare.initialMessage === undefined &&
+      compare.contenders.every((s) => s.text === undefined)
+    ) {
+      return false;
+    }
+    const attachments = compare.initialMessage?.attachments ?? [];
+    const fallbackText = compare.initialMessage?.text ?? "";
+    return compare.contenders.some((spec) =>
+      isProviderSignOutPrompt({ text: spec.text ?? fallbackText, attachments }),
+    );
   }
   if (method !== ORCHESTRATION_V2_WS_METHODS.dispatchCommand) return false;
   const command = payload as OrchestrationV2Command;

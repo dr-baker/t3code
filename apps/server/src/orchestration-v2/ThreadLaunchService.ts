@@ -107,6 +107,7 @@ export interface ThreadLaunchInput {
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
   readonly workspaceStrategy: ThreadLaunchWorkspaceStrategy;
+  readonly awaitWorkspacePreparation?: boolean;
   readonly initialMessage?: ThreadLaunchInitialMessage;
   readonly importedNativeThread?: {
     readonly ref: {
@@ -122,11 +123,13 @@ export interface ThreadLaunchInput {
   readonly linkOrigin?: OrchestrationV2LinkOrigin;
   /** The parent there, when that environment's agent delegated this as a task. */
   readonly delegatedFrom?: OrchestrationV2DelegatedFrom;
+  /** The local compare host thread when launching an unlisted compare contender. */
+  readonly compareParentThreadId?: ThreadId;
 }
 
 type PreparationInput = Pick<
   ThreadLaunchInput,
-  "commandId" | "projectId" | "workspaceStrategy" | "initialMessage"
+  "commandId" | "projectId" | "workspaceStrategy" | "awaitWorkspacePreparation" | "initialMessage"
 > & {
   readonly reusedWorktree?: { readonly baseRef: string };
 };
@@ -1102,7 +1105,9 @@ const make = Effect.gen(function* () {
           );
       }
       yield* setupTracker.stageStatus(threadId, "agent", "done");
-      yield* awaitAsyncSetup;
+      if (!(input.awaitWorkspacePreparation === true && runId === null)) {
+        yield* awaitAsyncSetup;
+      }
       yield* setupTracker.finish(threadId, "done");
     }).pipe(
       Effect.onError((cause) =>
@@ -1470,6 +1475,9 @@ const make = Effect.gen(function* () {
                 ...(input.delegatedFrom === undefined
                   ? {}
                   : { delegatedFrom: input.delegatedFrom }),
+                ...(input.compareParentThreadId === undefined
+                  ? {}
+                  : { compareParentThreadId: input.compareParentThreadId }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
                 ...(initialMessage === undefined
@@ -1579,11 +1587,19 @@ const make = Effect.gen(function* () {
                       branch: workspaceStrategy.branch,
                     }
                   : workspaceStrategy;
-            yield* schedulePreparation(
-              { ...input, workspaceStrategy: preparationStrategy },
-              threadId,
-              runId,
-            );
+            if (input.awaitWorkspacePreparation === true && runId === null) {
+              yield* prepareInBackground(
+                { ...input, workspaceStrategy: preparationStrategy },
+                threadId,
+                null,
+              ).pipe(Effect.ensuring(releasePreparation(input.commandId)));
+            } else {
+              yield* schedulePreparation(
+                { ...input, workspaceStrategy: preparationStrategy },
+                threadId,
+                runId,
+              );
+            }
           }).pipe(Effect.onError(() => releasePreparation(input.commandId)));
         }
         const projection = yield* threads

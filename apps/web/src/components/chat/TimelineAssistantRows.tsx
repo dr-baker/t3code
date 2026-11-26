@@ -6,7 +6,7 @@ import { T, useGT, useMessages } from "gt-react";
 import { memo, use, useState } from "react";
 import { type ChatMessage, type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
-import { GitForkIcon, ReplyIcon } from "lucide-react";
+import { Columns2Icon, GitForkIcon, ReplyIcon } from "lucide-react";
 import { captureAssistantMessageOpening } from "~/lib/assistantTextSelection";
 import { responseContextRecord } from "~/lib/composerContextRecords";
 import { Button } from "../ui/button";
@@ -202,6 +202,51 @@ function AssistantForkButton({
   );
 }
 
+function AssistantCompareButton({
+  projectedItem,
+  streaming,
+}: {
+  readonly projectedItem: NonNullable<Extract<TimelineRow, { kind: "message" }>["projectedItem"]>;
+  readonly streaming: boolean;
+}) {
+  const ctx = use(TimelineRowCtx);
+  const gt = useGT();
+  const onCompareFromRun = ctx.onCompareFromRun;
+  if (
+    streaming ||
+    onCompareFromRun === undefined ||
+    projectedItem.item.runId === null ||
+    projectedItem.item.status === "running" ||
+    projectedItem.item.status === "pending" ||
+    (ctx.threadRef !== null && projectedItem.sourceThreadId !== ctx.threadRef.threadId)
+  ) {
+    return null;
+  }
+  const runId = projectedItem.item.runId;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            data-testid="assistant-compare-button"
+            onClick={() => onCompareFromRun({ runId })}
+            aria-label={gt("Compare models from this response")}
+          />
+        }
+      >
+        <Columns2Icon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">
+        <T>Compare models from this response</T>
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
 export function AssistantMetaTimelineRow({
   row,
 }: {
@@ -258,7 +303,13 @@ function AssistantMessageMeta({
         streaming={copyStreaming}
       />
       {projectedItem?.item.type === "assistant_message" ? (
-        <AssistantForkButton projectedItem={projectedItem} />
+        <>
+          <AssistantForkButton projectedItem={projectedItem} />
+          <AssistantCompareButton
+            projectedItem={projectedItem}
+            streaming={Boolean(message.streaming)}
+          />
+        </>
       ) : null}
       {!message.streaming && projectedItem ? (
         <AssistantReplyButton message={message} itemId={projectedItem.sourceItemId} />

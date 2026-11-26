@@ -88,11 +88,22 @@ export function withCreationProvenance(
 ): OrchestrationV2Command {
   switch (command.type) {
     case "thread.create": {
-      // Only the server stamps a link's origin or folds in a first message, so a client cannot.
+      // Only the server stamps a link's origin, compare lineage/group, or initial message, so a client cannot.
       const {
         linkOrigin: _linkOrigin,
         delegatedFrom: _delegatedFrom,
+        compareParentThreadId: _compareParentThreadId,
+        compare: _compare,
         initialMessage: _initialMessage,
+        ...rest
+      } = command;
+      return { ...rest, ...provenance };
+    }
+    case "thread.fork": {
+      const {
+        compare: _compare,
+        clearWorktree: _clearWorktree,
+        pendingWorkspacePreparation: _pendingWorkspacePreparation,
         ...rest
       } = command;
       return { ...rest, ...provenance };
@@ -100,7 +111,6 @@ export function withCreationProvenance(
     case "message.dispatch":
     case "thread.rewrites.start":
     case "thread.rewrites.select":
-    case "thread.fork":
     case "thread.merge_back":
     case "delegated_task.request":
       return { ...command, ...provenance };

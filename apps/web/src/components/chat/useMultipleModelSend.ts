@@ -2,10 +2,12 @@ import { msg } from "gt-react";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m } from "~/i18n/messages";
 import {
+  CommandId,
+  MODEL_COMPARE_LIMITS,
+  ThreadId,
   type EnvironmentId,
   type ModelSelection,
   type RuntimeMode,
-  type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
@@ -24,6 +26,7 @@ import type { ComposerHandleRef } from "../../composerHandleContext";
 import { releaseDraftAttachments } from "../../lib/attachmentUploadQueue";
 import type { buildMessageContext } from "../../lib/composerContextRecords";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { serverEnvironment } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { buildThreadRouteParams } from "../../threadRoutes";
@@ -82,6 +85,9 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
   } = input;
   const navigate = useNavigate();
   const startThreadTurn = useOrchestrationCommand(threadEnvironment.startTurn, {
+    reportFailure: false,
+  });
+  const startCompare = useOrchestrationCommand(threadEnvironment.startCompare, {
     reportFailure: false,
   });
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
@@ -159,6 +165,96 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
           clearedDraftSnapshot &&
         appAtomRegistry.get(fanoutSelectionsAtom) === submittedSelections;
       setThreadError(threadId, null);
+      const serverConfig = appAtomRegistry.get(serverEnvironment.configValueAtom(environmentId));
+      const supportsModelCompare =
+        serverConfig?.environment.capabilities.modelCompare === true &&
+        targets.length >= MODEL_COMPARE_LIMITS.minContenders &&
+        targets.length <= MODEL_COMPARE_LIMITS.maxContenders;
+      if (supportsModelCompare) {
+        const retryKey = JSON.stringify([
+          "compare",
+          routeThreadKey,
+          messageText,
+          targets.map((target) => `${target.selection.instanceId}:${target.selection.model}`),
+        ]);
+        let hostThreadId = uncertainSubmissionsRef.current.get(retryKey);
+        if (!hostThreadId) {
+          hostThreadId = ThreadId.make(`compare:${newMessageId().slice(-12)}`);
+          uncertainSubmissionsRef.current.set(retryKey, hostThreadId);
+        }
+        const compareResult = await startCompare({
+          environmentId,
+          input: {
+            mode: "new",
+            commandId: CommandId.make(`start:${hostThreadId}`),
+            hostThreadId,
+            projectId: project.id,
+            title,
+            generateTitle: true,
+            contenders: targets.map((target) => ({
+              modelSelection: target.selection,
+              text: target.text,
+            })),
+            runtimeMode,
+            interactionMode: DEFAULT_INTERACTION_MODE,
+            workspaceStrategy: {
+              type: "worktree",
+              baseRef: branch,
+              ...(startFromOrigin ? { startFromOrigin: true } : {}),
+              ...(worktreeRepositories ? { repositories: worktreeRepositories } : {}),
+            },
+            initialMessage: {
+              messageId: newMessageId(),
+              text: messageText,
+              ...(context ? { context } : {}),
+              attachments,
+            },
+          },
+        });
+        if (compareResult._tag === "Failure") {
+          const failure = squashAtomCommandFailure(compareResult);
+          if (
+            typeof failure === "object" &&
+            failure !== null &&
+            "rolledBack" in failure &&
+            (failure as { rolledBack?: unknown }).rolledBack === true
+          ) {
+            uncertainSubmissionsRef.current.delete(retryKey);
+          }
+          throw failure;
+        }
+        uncertainSubmissionsRef.current.delete(retryKey);
+        sendInFlightRef.current = false;
+        resetLocalDispatch();
+        releasedComposer = true;
+        startedCount = compareResult.value.contenderThreadIds.length;
+        for (const failed of compareResult.value.failed) {
+          failedSelections.push(failed.modelSelection);
+        }
+        if (compareResult.value.failed.length > 0) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: m(msg("Some models could not be started")),
+              description: compareResult.value.failed
+                .map((item) => `${item.modelSelection.model}: ${item.error}`)
+                .join(" · "),
+            }),
+          );
+        } else {
+          appAtomRegistry.set(fanoutSelectionsAtom, null);
+          if (usesAttachmentUploads) {
+            releaseDraftAttachments(attachmentsSnapshot);
+          }
+        }
+        void navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(
+            scopeThreadRef(environmentId, compareResult.value.hostThreadId),
+          ),
+        });
+        return;
+      }
       const starts = Promise.all(
         targets.map(async (target) => {
           const started = await startFanoutThread({

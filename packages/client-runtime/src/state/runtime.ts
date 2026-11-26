@@ -1004,7 +1004,12 @@ export function createEnvironmentCommand<R, ER, Input, A, E>(
     execute: (target, registry) =>
       runInEnvironment(
         target.environmentId,
-        options.execute(target.input, registry, target.environmentId),
+        options.execute(target.input, registry, target.environmentId).pipe(
+          Effect.provideService(RpcPermissionGuard, {
+            authorize: (id, method, payload) =>
+              createCommandPermissions(runtime, method).authorize(registry, id, payload),
+          }),
+        ),
       ),
   });
 }
